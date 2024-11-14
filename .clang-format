@@ -6,9 +6,4 @@ UseTab: Never
 ColumnLimit: 80
 AllowShortIfStatementsOnASingleLine: false
 AllowShortLoopsOnASingleLine: false
-Naming:
-  StructCase: camelCase
-  UnionCase: camelCase
-  FunctionCase: PascalCase
-  MacroCase: UPPER_CASE
-
+PointerAlignment: Left
