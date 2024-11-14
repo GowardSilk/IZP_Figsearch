@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -38,10 +39,9 @@ static inline Error error_none() { return (Error){ERR_NONE, NULL}; }
 
 static inline void error_dispatch(Error err) { fprintf(stderr, "%s", err.msg); }
 
-void error_dtor(Error *err) {
-    if (err->msg) {
-        free(err->msg);
-        err->msg = NULL;
+void error_dtor(Error err) {
+    if (err.msg) {
+        free(err.msg);
     }
 }
 
@@ -148,10 +148,11 @@ Error bmp_load(const char *file_name, Bitmap *out_bmp) {
 
     size_t bytes_read = fread(raw, sizeof(char), size, file);
     if (bytes_read != size) {
+        int eof = feof(file);
         fclose(file);
         free(raw);
 
-        if (feof(file)) {
+        if (eof) {
             return error_ctor(
                 ERR_READ_RAW_BITMAP,
                 "Could not read the whole file (unexpected end of file)!");
@@ -188,6 +189,12 @@ Error bmp_load(const char *file_name, Bitmap *out_bmp) {
     return error_none();
 }
 
+void bmp_unload(Bitmap bmp) {
+    if (bmp.data) {
+        free(bmp.data);
+    }
+}
+
 #define bmp_pxl_is_valid(pxl) ((pxl) == '0') || ((pxl) == '1')
 
 bool bmp_is_valid(const Bitmap bmp) {
@@ -195,11 +202,9 @@ bool bmp_is_valid(const Bitmap bmp) {
     char *end = bmp.data + bmp.size.width * bmp.size.height;
     /* check bitmap values */
     for (; begin != end; begin++) {
-        printf("[ '%c' (%d) ], ", *begin, (int)*begin);
-        /*
         if (!bmp_pxl_is_valid(*begin)) {
             return false;
-        }*/
+        }
     }
     return true;
 }
@@ -211,8 +216,18 @@ typedef struct Command {
     Bitmap bmp;
 } Command;
 
+static inline void command_dtor(Command command) { bmp_unload(command.bmp); }
+
 Error command_help(void) {
-    printf("Some help message here...");
+    printf("Figsearch algorithm\n");
+    printf("-------------------\n");
+    printf("usage: figsearch [command] (optional)[bitmap location]\n");
+    printf("possible commands:\n");
+    printf("\t\t--help\n");
+    printf("\t\ttest\n");
+    printf("\t\thline\n");
+    printf("\t\tvline\n");
+    printf("\t\tsquare\n");
     return error_none();
 }
 Error command_test(Bitmap bmp) {
@@ -247,7 +262,7 @@ Error command_execute(Command *cmd) {
         case SQUARE:
             return command_square(cmd->bmp);
     }
-    return error_ctor(ERR_INTERNAL, "Invalid control path executed. Line: %d",
+    return error_ctor(ERR_INTERNAL, "Invalid control path executed on line: %d",
                       __LINE__);
 }
 
@@ -314,15 +329,15 @@ Error command_parse(int argc, char **argv, Command *out_cmd) {
 int main(int argc, char **argv) {
     /* parse command line */
     Command cmd = {0};
-    argv = (char *[]){"exe", "test", "pic.txt"};
-    argc = 3;
     {
         Error err = command_parse(argc, argv, &cmd);
         if (err.err) {
             error_dispatch(err);
+            error_dtor(err);
+            command_dtor(cmd);
             return err.err;
         }
-        error_dtor(&err);
+        error_dtor(err);
     }
 
     /* execute given command */
@@ -330,10 +345,15 @@ int main(int argc, char **argv) {
         Error err = command_execute(&cmd);
         if (err.err) {
             error_dispatch(err);
+            error_dtor(err);
+            command_dtor(cmd);
             return err.err;
         }
-        error_dtor(&err);
+        error_dtor(err);
     }
+
+    /* cleanup on success as well */
+    command_dtor(cmd);
 
     return ERR_NONE;
 }
