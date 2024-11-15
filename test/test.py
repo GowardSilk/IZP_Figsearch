@@ -5,8 +5,15 @@ import random
 from time import time
 import os
 
+DEF_BMP_SIZE = (2560, 1440)
+
 @dataclass
 class BitmapSize:
+
+    def __init__(self):
+        self.width = DEF_BMP_SIZE[0]
+        self.height = DEF_BMP_SIZE[1]
+
     width: int
     height: int
 
@@ -21,21 +28,27 @@ def generate_bmp(size: BitmapSize, loc: str):
         file.writelines(' '.join(generate_pix() for _ in range(size.width)) + "\n" for _ in range(size.height))
 
 def cmd_test(cmd_type: str, exec: str) -> None:
-    def run_unit(exec: str):
+    def run_unit(exec: str) -> float:
         bmp: str = f"pics/bmp_{random.randint(0, 10000)}"
-        generate_bmp(BitmapSize(1920, 1080), bmp)
+        generate_bmp(BitmapSize(), bmp)
         print([exec, "test", bmp])
+        begin = time()
         ret = subprocess.run([exec, "test", bmp])
+        end = time()
         if ret.returncode != 0:
             raise Exception(f"Failed test. {exec} returned: {ret.returncode}; expected: 0")
+        print(f"Test took: {end - begin}ms")
+        return end - begin
 
     match (cmd_type):
         case "time":
             print("[timed test]\n")
-            for _ in range(10):
-                begin = time()
-                run_unit(exec)
-                print(f"Test took: {time() - begin}ms")
+            average: float = 0
+            n_tests: int = 100
+            for _ in range(n_tests):
+                average += run_unit(exec)
+            average /= n_tests
+            print(f"Average: {average}")
 
         case "functionality":
             print("[functionality test]\n")

@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
@@ -50,34 +51,81 @@ typedef struct BitmapSize {
     uint32_t height;
 } BitmapSize;
 
-typedef char *BitmapData;
+typedef char Pixel;
+typedef Pixel *BitmapData;
+
+typedef struct BitmapRaw {
+    BitmapSize dimensions;
+    BitmapData data;
+    size_t size;
+    size_t cap;
+} BitmapRaw;
 
 typedef struct Bitmap {
-    BitmapSize size;
+    size_t size;
     BitmapData data;
 } Bitmap;
 
-size_t bmp_ignore_whitespace(char *raw, size_t raw_size) {
-    const char *raw_begin = raw;
-    char *raw_dst = raw;
-    for (; raw_dst != raw_begin + raw_size;) {
-        /* skip new line characters (Windows: \r\n; Linux: \n) */
-#ifdef _WIN32
-        if (*raw == '\r') {
-            raw++;
-        }
-#endif
-        if (*raw == '\n') {
-            raw++;
-        }
-        /* skip spaces */
-        if (*raw == ' ') {
-            raw++;
-        } else {
-            *raw_dst++ = *raw++;
-        }
+/**
+ * @brief constructs bitmap from raw bitmap
+ * @note constructor invalidates raw bitmap data pointer
+ */
+Bitmap bmp_ctor(BitmapRaw *bmp_raw) {
+    Bitmap bmp = (Bitmap){.data = bmp_raw->data, .size = bmp_raw->size};
+    bmp_raw->data = NULL;
+    return bmp;
+}
+
+void bmp_dtor(Bitmap *bmp) {
+    if (bmp->data) {
+        free(bmp->data);
     }
-    return raw_dst - raw_begin;
+}
+
+BitmapRaw bmp_raw_ctor(BitmapSize sz) {
+    BitmapRaw raw = {0};
+    raw.dimensions = sz;
+    raw.size = 0;
+    raw.cap = sz.height * sz.width;
+    raw.data = malloc(raw.cap);
+}
+
+BitmapRaw *bmp_raw_add(BitmapRaw *bmp, Pixel c) {
+    if (bmp->size + 1 >= bmp->cap) {
+        return NULL;
+    }
+    bmp->data[bmp->size++] = c;
+    return bmp;
+}
+
+void bmp_raw_dtor(BitmapRaw *bmp) {
+    free(bmp->data);
+    bmp->size = 0;
+    bmp->cap = 0;
+}
+
+static inline bool valid_whitespace(char c) { return c == ' ' || c == '\n'; }
+static inline bool valid_pix(char c) { return c == '1' || c == '0'; }
+
+Error bmp_ignore_whitespace(FILE *file, BitmapRaw *out_raw) {
+    int c = fgetc(file);
+    for (; c != EOF; c = fgetc(file)) {
+        if (valid_whitespace(c)) {
+            continue;
+        }
+        if (valid_pix(c)) {
+            if (!bmp_raw_add(out_raw, c)) {
+                printf("Invalid!");
+                return error_ctor(
+                    ERR_INVALID_BITMAP_FILE,
+                    "The raw bitmap size does not match given dimensions!");
+            }
+            continue;
+        }
+        return error_ctor(ERR_INVALID_BITMAP_FILE,
+                          "Unexpected character encountered: '%c'", (char)c);
+    }
+    return error_none();
 }
 
 static inline Error bmp_load_dimension(FILE *file, uint32_t *dimension) {
@@ -98,12 +146,9 @@ static inline Error bmp_load_size(FILE *file, BitmapSize *out_size) {
     return bmp_load_dimension(file, &out_size->width);
 }
 
-/**
- * @brief loads bitmap into "out_bmp"
- */
-Error bmp_load(const char *file_name, Bitmap *out_bmp) {
+Error bmp_load_internal(const char *file_name, BitmapRaw *out_bmp) {
     /* try to open the file */
-    FILE *file = fopen(file_name, "rb");
+    FILE *file = fopen(file_name, "r");
     /* return on error */
     if (file == NULL) {
         return error_ctor(ERR_INVALID_BITMAP_FILE,
@@ -113,110 +158,53 @@ Error bmp_load(const char *file_name, Bitmap *out_bmp) {
     /* if success, load raw */
 
     /* load the data size from the raw buffer */
-    Error err = bmp_load_size(file, &out_bmp->size);
+    BitmapSize size = {0};
+    Error err = bmp_load_size(file, &size);
     if (err.err) {
+        fclose(file);
         return err;
     }
-    printf("Loaded size: %dx%d\n", out_bmp->size.width, out_bmp->size.height);
 
-    /* calculate data size (in bytes) */
-    size_t data_fpos = ftell(file);
-    int success = fseek(file, 0, SEEK_END);
-    if (success != 0) {
-        return error_ctor(ERR_INVALID_BITMAP_FILE,
-                          "The file seems to be corrupted, raw bitmap could "
-                          "not be loaded! Error code: %d\n",
-                          errno);
-    }
-    size_t size = ftell(file) - data_fpos;
+    /* allocate raw bitmap */
+    *out_bmp = bmp_raw_ctor(size);
 
-    // todo: common safe function for seeking
-    success = fseek(file, data_fpos, SEEK_SET);
-    if (success != 0) {
-        return error_ctor(ERR_INVALID_BITMAP_FILE,
-                          "The file seems to be corrupted, raw bitmap could "
-                          "not be loaded! Error code: %d\n",
-                          errno);
-    }
+    /* filter whitespace from file into the raw bitmap */
+    bmp_ignore_whitespace(file, out_bmp);
 
-    /* allocate */
-    char *raw = malloc(size * sizeof(char));
-    if (!raw) {
-        fclose(file);
-        return error_ctor(ERR_INTERNAL, "Failed to allocate raw bitmap buffer");
-    }
-
-    size_t bytes_read = fread(raw, sizeof(char), size, file);
-    if (bytes_read != size) {
-        int eof = feof(file);
-        fclose(file);
-        free(raw);
-
-        if (eof) {
-            return error_ctor(
-                ERR_READ_RAW_BITMAP,
-                "Could not read the whole file (unexpected end of file)!");
-        } else {
-            return error_ctor(ERR_READ_RAW_BITMAP,
-                              "Could not read the whole file");
-        }
-    }
-
-    /* close file, we do not need it anymore */
+    /* free resources upon function leave */
     fclose(file);
-
-    /* normalize the raw buffer from whitespace (note: without size) */
-    size_t new_size = bmp_ignore_whitespace(raw, size);
-    printf("Raw normalized: %s\n", raw);
-
-    // todo: because of bad sizing, this does not work: see "Raw" data
-    // if (new_size != (size_t)out_bmp->size.width * out_bmp->size.height) {
-    //    return error_ctor(ERR_INVALID_BITMAP_FILE, "Bitmap contains illegal
-    //    characters!");
-    //}
-
-    out_bmp->data = malloc(new_size);
-    if (!out_bmp->data) {
-        free(raw);
-        return error_ctor(ERR_INTERNAL, "Failed to allocate bitmap data!");
-    }
-    // todo: buffer is larger than expected
-    memcpy(out_bmp->data, raw, new_size);
-
-    /* release resources */
-    free(raw);
 
     return error_none();
 }
 
-void bmp_unload(Bitmap bmp) {
-    if (bmp.data) {
-        free(bmp.data);
+/**
+ * @brief loads raw bitmap into "out_bmp"
+ * @note if "out_bmp" param is NULL, function only validates file
+ */
+Error bmp_load(const char *file_name, BitmapRaw *out_bmp) {
+    if (out_bmp) {
+        return bmp_load_internal(file_name, out_bmp);
     }
-}
 
-#define bmp_pxl_is_valid(pxl) ((pxl) == '0') || ((pxl) == '1')
-
-bool bmp_is_valid(const Bitmap bmp) {
-    char *begin = bmp.data;
-    char *end = bmp.data + bmp.size.width * bmp.size.height;
-    /* check bitmap values */
-    for (; begin != end; begin++) {
-        if (!bmp_pxl_is_valid(*begin)) {
-            return false;
+    /* validate file */
+    BitmapRaw bmp = {0};
+    Error err = bmp_load_internal(file_name, &bmp);
+    {
+        if (err.err) {
+            error_dtor(err);
+            return error_ctor(ERR_INVALID_BITMAP_FILE, "Invalid");
         }
+        error_dtor(err);
+        return error_ctor(ERR_NONE, "Valid");
     }
-    return true;
 }
 
 typedef enum CommandType { HELP = 0, TEST, HLINE, VLINE, SQUARE } CommandType;
 
 typedef struct Command {
     CommandType type;
-    Bitmap bmp;
+    const char *file_name;
 } Command;
-
-static inline void command_dtor(Command command) { bmp_unload(command.bmp); }
 
 Error command_help(void) {
     printf("Figsearch algorithm\n");
@@ -230,22 +218,29 @@ Error command_help(void) {
     printf("\t\tsquare\n");
     return error_none();
 }
-Error command_test(Bitmap bmp) {
-    if (!bmp_is_valid(bmp)) {
-        return error_ctor(ERR_BITMAP_TEST, "Invalid");
-    }
-    return error_ctor(ERR_NONE, "Valid");
-}
-Error command_hline(Bitmap bmp) {
+Error command_test(const char *file_name) { return bmp_load(file_name, NULL); }
+Error command_hline(const char *file_name) {
     printf("Hello from command_hline");
+    Bitmap bmp = {0};
+    {
+        BitmapRaw raw = {0};
+        Error err = bmp_load(file_name, &raw);
+        if (err.err) {
+            return err;
+        }
+        bmp = bmp_ctor(&raw);
+    }
+    assert(false);  // TODO
     return error_none();
 }
-Error command_vline(Bitmap bmp) {
+Error command_vline(const char *file_name) {
     printf("Hello from command_vline");
+    assert(false);  // TODO
     return error_none();
 }
-Error command_square(Bitmap bmp) {
+Error command_square(const char *file_name) {
     printf("Hello from command_square");
+    assert(false);  // TODO
     return error_none();
 }
 
@@ -254,13 +249,13 @@ Error command_execute(Command *cmd) {
         case HELP:
             return command_help();
         case TEST:
-            return command_test(cmd->bmp);
+            return command_test(cmd->file_name);
         case HLINE:
-            return command_hline(cmd->bmp);
+            return command_hline(cmd->file_name);
         case VLINE:
-            return command_vline(cmd->bmp);
+            return command_vline(cmd->file_name);
         case SQUARE:
-            return command_square(cmd->bmp);
+            return command_square(cmd->file_name);
     }
     return error_ctor(ERR_INTERNAL, "Invalid control path executed on line: %d",
                       __LINE__);
@@ -287,39 +282,34 @@ Error command_parse(int argc, char **argv, Command *out_cmd) {
                           "you forget to add bitmap file name?",
                           argv[1]);
     }
-    /* todo: fix redudancy ??? */
+
+/* convenient macro for cmd member data assingment (command parse function-only)
+ */
+#define register_cmd(cmd, cmd_type, cmd_file_name) \
+    {                                              \
+        (cmd).type = cmd_type;                     \
+        (cmd).file_name = cmd_file_name;           \
+    }
+
     if (strcmp(argv[1], "test") == 0) {
-        out_cmd->type = TEST;
-        Error err = bmp_load(argv[2], &out_cmd->bmp);
-        if (err.err) {
-            return err;
-        }
+        register_cmd(*out_cmd, TEST, argv[2]);
         return error_none();
     }
     if (strcmp(argv[1], "hline") == 0) {
-        out_cmd->type = HLINE;
-        Error err = bmp_load(argv[2], &out_cmd->bmp);
-        if (err.err) {
-            return err;
-        }
+        register_cmd(*out_cmd, HLINE, argv[2]);
         return error_none();
     }
     if (strcmp(argv[1], "vline") == 0) {
-        out_cmd->type = VLINE;
-        Error err = bmp_load(argv[2], &out_cmd->bmp);
-        if (err.err) {
-            return err;
-        }
+        register_cmd(*out_cmd, VLINE, argv[2]);
         return error_none();
     }
     if (strcmp(argv[1], "square") == 0) {
-        out_cmd->type = SQUARE;
-        Error err = bmp_load(argv[2], &out_cmd->bmp);
-        if (err.err) {
-            return err;
-        }
+        register_cmd(*out_cmd, SQUARE, argv[2]);
         return error_none();
     }
+
+#undef register_cmd
+
     return error_ctor(ERR_INVALID_COMMAND,
                       "Invalid command given [%s]! Expected one of: --help, "
                       "test, hline, vline, sqaure.",
@@ -334,7 +324,6 @@ int main(int argc, char **argv) {
         if (err.err) {
             error_dispatch(err);
             error_dtor(err);
-            command_dtor(cmd);
             return err.err;
         }
         error_dtor(err);
@@ -346,14 +335,12 @@ int main(int argc, char **argv) {
         if (err.err) {
             error_dispatch(err);
             error_dtor(err);
-            command_dtor(cmd);
             return err.err;
         }
         error_dtor(err);
     }
 
-    /* cleanup on success as well */
-    command_dtor(cmd);
+    printf("exiting...");
 
     return ERR_NONE;
 }
