@@ -1,12 +1,15 @@
 #include <assert.h>
-#include <ctype.h>
-#include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* =========================================
+ *                  Error
+ * ========================================= */
 
 typedef uint64_t ErrorNum;
 #define ERR_NONE (ErrorNum)0
@@ -36,9 +39,11 @@ Error error_ctor(ErrorNum err, const char *fmt, ...) {
     return (Error){err, msg};
 }
 
-static inline Error error_none() { return (Error){ERR_NONE, NULL}; }
+static inline Error error_none(void) { return (Error){ERR_NONE, NULL}; }
 
-static inline void error_dispatch(Error err) { fprintf(stderr, "%s", err.msg); }
+static inline void error_dispatch(Error err) {
+    fprintf(stderr, "%s (Error code: %#llx)", err.msg, err.err);
+}
 
 void error_dtor(Error err) {
     if (err.msg) {
@@ -46,29 +51,55 @@ void error_dtor(Error err) {
     }
 }
 
+/* =========================================
+ *                  Bitmap
+ * ========================================= */
+
 typedef struct BitmapSize {
     uint32_t width;
     uint32_t height;
 } BitmapSize;
 
-static inline size_t bmp_size_raw(BitmapSize dimension) {
-    return (size_t)dimension.width * dimension.height;
-}
-
 typedef char Pixel;
 typedef Pixel *BitmapData;
 
 typedef struct BitmapRaw {
+    /* @brief specificies the dimensions of the final bitmap image */
     BitmapSize dimensions;
     BitmapData data;
+    /* @brief holds the current number of pixels added to the "data" member (see
+     * bmp_raw_add)*/
     size_t size;
-    size_t cap;
 } BitmapRaw;
 
 typedef struct Bitmap {
     BitmapSize dimensions;
     BitmapData data;
 } Bitmap;
+
+typedef struct BitmapIterator {
+    char *begin;
+    char *end;
+    size_t offset;
+} BitmapIterator;
+
+static inline size_t bmp_size_raw(BitmapSize dimension) {
+    return (size_t)dimension.width * dimension.height;
+}
+
+BitmapIterator bmp_it_ctor(char *begin, char *end, ptrdiff_t offset) {
+    return (BitmapIterator){begin, end, offset};
+}
+
+BitmapIterator *bmp_it_move(BitmapIterator *it) {
+    if (it->begin + it->offset < it->end) {
+        it->begin += it->offset;
+    } else {
+        // note: is it fine to "damp" the iterator or should we throw ???
+        it->begin = it->end;
+    }
+    return it;
+}
 
 /**
  * @brief constructs bitmap from raw bitmap
@@ -91,13 +122,17 @@ BitmapRaw bmp_raw_ctor(BitmapSize sz) {
     BitmapRaw raw = {0};
     raw.dimensions = sz;
     raw.size = 0;
-    raw.cap = (size_t)sz.height * sz.width + 1;
-    raw.data = malloc(raw.cap);
+    raw.data = malloc(bmp_size_raw(sz) + 1);
+    if (raw.data == NULL) {
+        fprintf(stderr,
+                "Memory allocation failed for BitmapRaw of size %d x %d\n",
+                sz.width, sz.height);
+    }
     return raw;
 }
 
 BitmapRaw *bmp_raw_add(BitmapRaw *bmp, Pixel c) {
-    if (bmp->size + 1 >= bmp->cap) {
+    if (bmp->size >= bmp_size_raw(bmp->dimensions)) {
         return NULL;
     }
     bmp->data[bmp->size++] = c;
@@ -108,20 +143,21 @@ void bmp_raw_dtor(BitmapRaw *bmp) {
     if (bmp->data) {
         free(bmp->data);
         bmp->size = 0;
-        bmp->cap = 0;
     }
 }
 
-static inline bool valid_whitespace(char c) { return c == ' ' || c == '\n'; }
-static inline bool valid_pix(char c) { return c == '1' || c == '0'; }
+static inline bool bmp_valid_whitespace(char c) {
+    return c == ' ' || c == '\n';
+}
+static inline bool bmp_valid_pix(Pixel c) { return c == '1' || c == '0'; }
 
 Error bmp_ignore_whitespace(FILE *file, BitmapRaw *out_raw) {
     int c = fgetc(file);
     for (; c != EOF; c = fgetc(file)) {
-        if (valid_whitespace(c)) {
+        if (bmp_valid_whitespace(c)) {
             continue;
         }
-        if (valid_pix(c)) {
+        if (bmp_valid_pix(c)) {
             if (!bmp_raw_add(out_raw, c)) {
                 return error_ctor(
                     ERR_INVALID_BITMAP_FILE,
@@ -136,11 +172,11 @@ Error bmp_ignore_whitespace(FILE *file, BitmapRaw *out_raw) {
 }
 
 static inline Error bmp_load_dimension(FILE *file, uint32_t *dimension) {
-    int ret = fscanf(file, "%u", dimension);
+    int32_t ret = fscanf(file, "%u", dimension);
     if (ret != 1) {
         return error_ctor(ERR_INVALID_DIMENSION,
                           "Given dimension [%d], is not an int value!",
-                          dimension);
+                          *dimension);
     }
     return error_none();
 }
@@ -213,6 +249,93 @@ Error bmp_load(const char *file_name, BitmapRaw *out_bmp) {
     }
 }
 
+/* =========================================
+ *                  Line
+ * ========================================= */
+
+typedef struct Point {
+    uint32_t x, y;
+} Point;
+
+typedef struct Line {
+    Point begin, end;
+} Line;
+typedef Line VLine;
+typedef Line HLine;
+
+static inline Line line_ctor(Point begin, Point end) {
+    return (Line){begin, end};
+}
+
+static inline void line_print(Line line) {
+    printf("%d %d %d %d\n", line.begin.y, line.begin.x, line.end.y, line.end.x);
+}
+
+static inline uint32_t hline_length(HLine line) {
+    return line.end.x - line.begin.x;
+}
+
+static inline uint32_t vline_length(VLine line) {
+    return line.end.y - line.begin.y;
+}
+
+HLine scan_for_hline_internal(BitmapIterator *it, const uint32_t curr_row,
+                              uint32_t *col_counter) {
+    Point start = {.x = *col_counter, .y = curr_row};
+    Point end = start;
+
+    for (; it->begin < it->end && *(it->begin) == '1'; (*col_counter)++) {
+        bmp_it_move(it);
+        end.x++;
+    }
+
+    return line_ctor(start, end);
+}
+
+/**
+ * @brief scans given row of bitmap for the longest horizontal line
+ * @param out_max is set iff its initial value is lower than the max row line
+ */
+void scan_for_hline(BitmapIterator it, const uint32_t curr_row,
+                    HLine *out_max) {
+    uint32_t col_counter = 0;
+    for (; it.begin < it.end; bmp_it_move(&it), col_counter++) {
+        HLine max = scan_for_hline_internal(&it, curr_row, &col_counter);
+        if (hline_length(*out_max) < hline_length(max)) {
+            *out_max = max;
+        }
+    }
+}
+
+VLine scan_for_vline_internal(BitmapIterator *it, const uint32_t curr_col,
+                              uint32_t *row_counter) {
+    Point start = {.x = curr_col, .y = *row_counter};
+    Point end = start;
+
+    (*row_counter)++;
+    for (; it->begin < it->end && *(it->begin) == '1'; (*row_counter)++) {
+        bmp_it_move(it);
+        end.y++;
+    }
+
+    return line_ctor(start, end);
+}
+
+void scan_for_vline(BitmapIterator it, const uint32_t curr_col,
+                    VLine *out_max) {
+    uint32_t row_counter = 0;
+    for (; it.begin < it.end; bmp_it_move(&it)) {
+        VLine max = scan_for_vline_internal(&it, curr_col, &row_counter);
+        if (vline_length(*out_max) < vline_length(max)) {
+            *out_max = max;
+        }
+    }
+}
+
+/* =========================================
+ *                 Command
+ * ========================================= */
+
 typedef enum CommandType { HELP = 0, TEST, HLINE, VLINE, SQUARE } CommandType;
 
 typedef struct Command {
@@ -244,65 +367,7 @@ Error command_help(void) {
  */
 Error command_test(const char *file_name) { return bmp_load(file_name, NULL); }
 
-typedef struct Point {
-    uint32_t x, y;
-} Point;
-
-typedef struct Line {
-    Point begin, end;
-} Line;
-typedef Line VLine;
-typedef Line HLine;
-
-static inline Line line_ctor(Point begin, Point end) {
-    return (Line){begin, end};
-}
-
-static inline void line_print(Line line) {
-    printf("%d %d %d %d\n", line.begin.y, line.begin.x, line.end.y, line.end.x);
-}
-
-static inline uint32_t hline_length(HLine line) {
-    return line.end.x - line.begin.x;
-}
-
-static inline uint32_t vline_length(VLine line) {
-    return line.end.y - line.begin.y;
-}
-
-static inline HLine scan_for_hline_internal(const char *begin, const char *end,
-                                            Point *curr_line) {
-    Point line_start = *curr_line, line_end = *curr_line;
-    curr_line->x++;
-    for (; begin + curr_line->x < end && *(begin + curr_line->x) == '1';
-         curr_line->x++) {
-        line_end.x++;
-    }
-    return line_ctor(line_start, line_end);
-}
-
-/**
- * @brief scans given row of bitmap for the longest horizontal line
- * @param out_max is set if and only if any of its initial value is lower than
- * any on the line
- */
-void scan_for_hline(const char *begin, const char *end, Point curr_line,
-                    HLine *out_max) {
-    for (; begin + curr_line.x < end; curr_line.x++) {
-        HLine max = scan_for_hline_internal(begin, end, &curr_line);
-        /* compare curr max line with out_max */
-        if (hline_length(*out_max) < hline_length(max)) {
-            /* set new max since out_max is shorter */
-            *out_max = max;
-        }
-    }
-}
-
-/**
- * @brief executes "hline" figsearch command by printing the longest
- * [h]orizontal [line] to the stdout
- */
-Error command_hline(const char *file_name) {
+Error command_line(const char *file_name, Line (*line_search)(Bitmap *bmp)) {
     /* load bitmap */
     Bitmap bmp = {0};
     {
@@ -315,16 +380,11 @@ Error command_hline(const char *file_name) {
         bmp = bmp_ctor(&raw);
     }
 
-    /* search for longest horizontal line */
-    HLine max = {0};
-    for (uint32_t i = 0; i < bmp.dimensions.height; i++) {
-        scan_for_hline((i * bmp.dimensions.width) + bmp.data,
-                       ((i + 1) * bmp.dimensions.width) + bmp.data,
-                       (Point){.x = 0, .y = i}, &max);
-    }
+    /* scan for longest line */
+    Line max_line = line_search(&bmp);
 
     /* print results */
-    line_print(max);
+    line_print(max_line);
 
     /* cleanup */
     bmp_dtor(&bmp);
@@ -332,81 +392,39 @@ Error command_hline(const char *file_name) {
     return error_none();
 }
 
-typedef struct BitmapIterator {
-    char *begin;
-    char *end;
-    ptrdiff_t offset;
-} BitmapIterator;
-
-BitmapIterator bmp_it_ctor(char *begin, char *end, ptrdiff_t offset) {
-    return (BitmapIterator){begin, end, offset};
+/** @brief scans for longest horizontal line */
+HLine command_hline_search(Bitmap *bmp) {
+    // todo: will there always be horizontal line ???
+    HLine max = {0};
+    for (uint32_t i = 0; i < bmp->dimensions.height; i++) {
+        scan_for_hline(bmp_it_ctor(
+                           /* begin of i-th row */
+                           (i * bmp->dimensions.width) + bmp->data,
+                           /* end of i-th row */
+                           ((i + 1) * bmp->dimensions.width) + bmp->data,
+                           /* offset by */
+                           sizeof(Pixel)),
+                       i, &max);
+    }
+    return max;
 }
 
-BitmapIterator *bmp_it_move(BitmapIterator *it) {
-    if (it->begin + it->offset < it->end) {
-        it->begin += it->offset;
-    } else {
-        // note: is this fine to "damp" the iterator or should we throw ??
-        it->begin = it->end;
-    }
-    return it;
-}
-
-VLine scan_for_vline_internal(BitmapIterator *it, const uint32_t curr_col,
-                              uint32_t *row_counter) {
-    Point start = {.x = curr_col, .y = *row_counter};
-    Point end = start;
-
-    (*row_counter)++;
-    for (; it->begin < it->end && *(it->begin) == '1'; (*row_counter)++) {
-        bmp_it_move(it);
-        end.y++;
-    }
-
-    return line_ctor(start, end);
-}
-
-void scan_for_vline(BitmapIterator it, const uint32_t curr_col,
-                    VLine *out_max) {
-    uint32_t row_counter = 0;
-    while (it.begin < it.end) {
-        VLine max = scan_for_vline_internal(&it, curr_col, &row_counter);
-        if (vline_length(*out_max) < vline_length(max)) {
-            *out_max = max;
-        }
-        bmp_it_move(&it);
-    }
-}
-
-Error command_vline(const char *file_name) {
-    /* load bitmap */
-    Bitmap bmp = {0};
-    {
-        BitmapRaw raw = {0};
-        Error err = bmp_load(file_name, &raw);
-        if (err.err) {
-            bmp_raw_dtor(&raw);
-            return err;
-        }
-        bmp = bmp_ctor(&raw);
-    }
-
-    /* search for longest vertical line */
+/** @brief scans for longest vertical line */
+VLine command_vline_search(Bitmap *bmp) {
+    // todo: will there always vertical line ???
     VLine max = {0};
-    for (uint32_t i = 0; i < bmp.dimensions.width; i++) {
-        scan_for_vline(
-            bmp_it_ctor(i + bmp.data,
-                        (i + bmp.data) +
-                            (bmp.dimensions.height - 1) * bmp.dimensions.width,
-                        bmp.dimensions.width),
-            i, &max);
+    for (uint32_t i = 0; i < bmp->dimensions.width; i++) {
+        scan_for_vline(bmp_it_ctor(
+                           /* i-th column */
+                           i + bmp->data,
+                           /* i-th column offsetted by row - 1 */
+                           (i + bmp->data) + (bmp->dimensions.height - 1) *
+                                                 bmp->dimensions.width,
+                           /* number of iterations = number of rows */
+                           bmp->dimensions.width),
+                       i, &max);
     }
-
-    /* print results */
-    line_print(max);
-
-    /* cleanup */
-    return error_none();
+    return max;
 }
 
 Error command_square(const char *file_name) {
@@ -422,9 +440,9 @@ Error command_execute(Command *cmd) {
         case TEST:
             return command_test(cmd->file_name);
         case HLINE:
-            return command_hline(cmd->file_name);
+            return command_line(cmd->file_name, command_hline_search);
         case VLINE:
-            return command_vline(cmd->file_name);
+            return command_line(cmd->file_name, command_vline_search);
         case SQUARE:
             return command_square(cmd->file_name);
     }
@@ -490,8 +508,6 @@ Error command_parse(int argc, char **argv, Command *out_cmd) {
 int main(int argc, char **argv) {
     /* parse command line */
     Command cmd = {0};
-    argc = 3;
-    argv = (char *[]){"exe", "vline", "../../../build/pic.txt"};
     {
         Error err = command_parse(argc, argv, &cmd);
         if (err.err) {
