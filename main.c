@@ -11,7 +11,7 @@
  *                  Error
  * ========================================= */
 
-typedef uint64_t ErrorNum;
+typedef int ErrorNum;
 #define ERR_NONE (ErrorNum)0
 #define ERR_INTERNAL (ErrorNum)0x000000B5
 #define ERR_INVALID_NUMBER_ARGS (ErrorNum)0xB16B00B5
@@ -22,32 +22,43 @@ typedef uint64_t ErrorNum;
 #define ERR_INVALID_DIMENSION (ErrorNum)0xABADBABE
 
 typedef struct Error {
-    ErrorNum err;
+    ErrorNum code;
     char *msg;
 } Error;
 
 Error error_ctor(ErrorNum err, const char *fmt, ...) {
+    /* construct the formatted message of the error */
     va_list fmt_args;
     va_start(fmt_args, fmt);
+
+    /* required err msg size */
     int size = vsnprintf(NULL, 0, fmt, fmt_args) + 1;
-    // todo: check allocation
-    char *msg = calloc(size, sizeof(char));
-    // todo: check printf
-    size = vsnprintf(msg, size, fmt, fmt_args);
+
+    char *err_msg = calloc(size, sizeof(char));
+    if (!err_msg) {
+        fprintf(stderr,
+                "Internal error: allocation failed while creating error "
+                "object. Requested size: %d bytes.\n (Error code: %#x)",
+                size, ERR_INTERNAL);
+        return (Error){ERR_INTERNAL, NULL};
+    }
+
+    /* write formatted message */
+    size = vsnprintf(err_msg, size, fmt, fmt_args);
     va_end(fmt_args);
 
-    return (Error){err, msg};
+    return (Error){err, err_msg};
 }
 
 static inline Error error_none(void) { return (Error){ERR_NONE, NULL}; }
 
-static inline void error_dispatch(Error err) {
-    fprintf(stderr, "%s (Error code: %#llx)", err.msg, err.err);
-}
+static inline void error_print(Error err) { fprintf(stderr, "%s\n", err.msg); }
 
-void error_dtor(Error err) {
-    if (err.msg) {
-        free(err.msg);
+void error_dtor(Error *err) {
+    if (err->msg) {
+        free(err->msg);
+        err->msg = NULL;
+        err->code = ERR_NONE;
     }
 }
 
@@ -63,19 +74,25 @@ typedef struct BitmapSize {
 typedef char Pixel;
 typedef Pixel *BitmapData;
 
-typedef struct BitmapRaw {
-    /* @brief specificies the dimensions of the final bitmap image */
-    BitmapSize dimensions;
-    BitmapData data;
-    /* @brief holds the current number of pixels added to the "data" member (see
-     * bmp_raw_add)*/
-    size_t size;
-} BitmapRaw;
-
 typedef struct Bitmap {
     BitmapSize dimensions;
     BitmapData data;
 } Bitmap;
+
+/**
+ * @brief BitmapLoader is responsible for loading bitmap
+ */
+typedef struct BitmapLoader {
+    /** @brief staging bitmap buffer */
+    Bitmap staging;
+
+    /* BitmapLoader metadata */
+
+    /** @brief stores the filename of the bitmap file */
+    const char *file_name;
+    /** @brief holds the current number of pixels stored in bitmap */
+    size_t size;
+} BitmapLoader;
 
 typedef struct BitmapIterator {
     char *begin;
@@ -101,49 +118,63 @@ BitmapIterator *bmp_it_move(BitmapIterator *it) {
     return it;
 }
 
-/**
- * @brief constructs bitmap from raw bitmap
- * @note constructor invalidates raw bitmap data pointer
- */
-Bitmap bmp_ctor(BitmapRaw *bmp_raw) {
-    Bitmap bmp =
-        (Bitmap){.data = bmp_raw->data, .dimensions = bmp_raw->dimensions};
-    bmp_raw->data = NULL;
-    return bmp;
+Bitmap bmp_ctor(BitmapSize dimensions) {
+    /* TODO !!!!!!!! */
+    /*
+    if (raw.staging.data == NULL) {
+        fprintf(stderr,
+                "Memory allocation failed for BitmapLoader of size %d x %d\n",
+                sz.width, sz.height);
+    }*/
+    return (Bitmap){
+        .dimensions = dimensions,
+        .data = malloc(sizeof(Pixel) * bmp_size_raw(dimensions) + 1),
+    };
 }
 
 void bmp_dtor(Bitmap *bmp) {
     if (bmp->data) {
         free(bmp->data);
+        bmp->dimensions = (BitmapSize){0};
     }
 }
 
-BitmapRaw bmp_raw_ctor(BitmapSize sz) {
-    BitmapRaw raw = {0};
-    raw.dimensions = sz;
-    raw.size = 0;
-    raw.data = malloc(bmp_size_raw(sz) + 1);
-    if (raw.data == NULL) {
-        fprintf(stderr,
-                "Memory allocation failed for BitmapRaw of size %d x %d\n",
-                sz.width, sz.height);
-    }
-    return raw;
+BitmapLoader bmp_loader_ctor(const char *file_name) {
+    return (BitmapLoader){
+        .staging.dimensions = (BitmapSize){0},
+        .staging.data = NULL,
+
+        .size = 0,
+        .file_name = file_name,
+    };
 }
 
-BitmapRaw *bmp_raw_add(BitmapRaw *bmp, Pixel c) {
-    if (bmp->size >= bmp_size_raw(bmp->dimensions)) {
+void bmp_loader_dtor(BitmapLoader *loader) {
+    if (loader->staging.data) {
+        free(loader->staging.data);
+        loader->size = 0;
+        loader->file_name = NULL;
+    }
+}
+
+/** @note there is only issue with "bmp_loader_dtor" being accidently called
+ * after this call .... */
+static inline Bitmap bmp_loader_get_bitmap(BitmapLoader *loader) {
+    /* copy the final bitmap before invalidation */
+    Bitmap final = loader->staging;
+
+    /* invalidate loader's staging buffer */
+    loader->staging = (Bitmap){0};
+
+    return final;
+}
+
+BitmapLoader *bmp_loader_add_pixel(BitmapLoader *loader, Pixel c) {
+    if (loader->size >= bmp_size_raw(loader->staging.dimensions)) {
         return NULL;
     }
-    bmp->data[bmp->size++] = c;
-    return bmp;
-}
-
-void bmp_raw_dtor(BitmapRaw *bmp) {
-    if (bmp->data) {
-        free(bmp->data);
-        bmp->size = 0;
-    }
+    loader->staging.data[loader->size++] = c;
+    return loader;
 }
 
 static inline bool bmp_valid_whitespace(char c) {
@@ -151,14 +182,14 @@ static inline bool bmp_valid_whitespace(char c) {
 }
 static inline bool bmp_valid_pix(Pixel c) { return c == '1' || c == '0'; }
 
-Error bmp_ignore_whitespace(FILE *file, BitmapRaw *out_raw) {
+Error bmp_loader_ignore_whitespace(FILE *file, BitmapLoader *loader) {
     int c = fgetc(file);
     for (; c != EOF; c = fgetc(file)) {
         if (bmp_valid_whitespace(c)) {
             continue;
         }
         if (bmp_valid_pix(c)) {
-            if (!bmp_raw_add(out_raw, c)) {
+            if (!bmp_loader_add_pixel(loader, c)) {
                 return error_ctor(
                     ERR_INVALID_BITMAP_FILE,
                     "The raw bitmap size does not match given dimensions!");
@@ -171,7 +202,8 @@ Error bmp_ignore_whitespace(FILE *file, BitmapRaw *out_raw) {
     return error_none();
 }
 
-static inline Error bmp_load_dimension(FILE *file, uint32_t *dimension) {
+static inline Error bmp_loader_load_dimension(FILE *file, uint32_t *dimension) {
+    /* TODO !!!!!!!! */
     int32_t ret = fscanf(file, "%u", dimension);
     if (ret != 1) {
         return error_ctor(ERR_INVALID_DIMENSION,
@@ -181,40 +213,43 @@ static inline Error bmp_load_dimension(FILE *file, uint32_t *dimension) {
     return error_none();
 }
 
-static inline Error bmp_load_size(FILE *file, BitmapSize *out_size) {
-    Error err = bmp_load_dimension(file, &out_size->height);
-    if (err.err) {
+static inline Error bmp_loader_load_size(FILE *file, BitmapSize *out_size) {
+    Error err = bmp_loader_load_dimension(file, &out_size->height);
+    /* TODO !!!!!!!!!! */
+    if (err.code) {
         return err;
     }
-    return bmp_load_dimension(file, &out_size->width);
+    return bmp_loader_load_dimension(file, &out_size->width);
 }
 
-Error bmp_load_internal(const char *file_name, BitmapRaw *out_bmp) {
+/**
+ * @brief loads bitmap into loader's staging buffer
+ */
+Error bmp_loader_load(BitmapLoader *loader) {
     /* try to open the file */
-    FILE *file = fopen(file_name, "r");
+    FILE *file = fopen(loader->file_name, "r");
     /* return on error */
     if (file == NULL) {
         return error_ctor(ERR_INVALID_BITMAP_FILE,
                           "Given bitmap file [%s] does not exist!\n",
-                          file_name);
+                          loader->file_name);
     }
-    /* if success, load raw */
+    /* if success, load */
 
-    /* load the data size from the raw buffer */
+    /* load the data size from file */
     BitmapSize size = {0};
-    Error err = bmp_load_size(file, &size);
-    if (err.err) {
+    Error err = bmp_loader_load_size(file, &size);
+    if (err.code) {
         fclose(file);
         return err;
     }
 
-    /* allocate raw bitmap */
-    *out_bmp = bmp_raw_ctor(size);
+    /* allocate staging buffer */
+    loader->staging = bmp_ctor(size);
 
     /* filter whitespace from file into the raw bitmap */
-    err = bmp_ignore_whitespace(file, out_bmp);
-    if (err.err) {
-        bmp_raw_dtor(out_bmp);
+    err = bmp_loader_ignore_whitespace(file, loader);
+    if (err.code) {
         fclose(file);
         return err;
     }
@@ -223,30 +258,6 @@ Error bmp_load_internal(const char *file_name, BitmapRaw *out_bmp) {
     fclose(file);
 
     return error_none();
-}
-
-/**
- * @brief loads raw bitmap into "out_bmp"
- * @note if "out_bmp" param is NULL, function only validates file
- */
-Error bmp_load(const char *file_name, BitmapRaw *out_bmp) {
-    if (out_bmp) {
-        return bmp_load_internal(file_name, out_bmp);
-    }
-
-    /* validate file */
-    BitmapRaw bmp = {0};
-    Error err = bmp_load_internal(file_name, &bmp);
-    {
-        if (err.err) {
-            error_dispatch(err);
-            error_dtor(err);
-            return error_ctor(ERR_INVALID_BITMAP_FILE, "Invalid");
-        }
-        error_dtor(err);
-        printf("Valid\n");
-        return error_none();
-    }
 }
 
 /* =========================================
@@ -365,19 +376,37 @@ Error command_help(void) {
  * @return ERR_INVALID_BITMAP_FILE with message "Invalid"
  * @see bmp_load when bmp raw param is set to NULL
  */
-Error command_test(const char *file_name) { return bmp_load(file_name, NULL); }
+static inline Error command_test(const char *file_name) {
+    /* TODO !!!! */
+    BitmapLoader temp = bmp_loader_ctor(file_name);
+
+    Error err = bmp_loader_load(&temp);
+    {
+        if (err.code) {
+            error_dtor(&err);
+            bmp_loader_dtor(&temp);
+            return error_ctor(ERR_INVALID_BITMAP_FILE, "Invalid");
+        }
+
+        printf("Valid\n");
+    }
+
+    bmp_loader_dtor(&temp);
+
+    return error_none();
+}
 
 Error command_line(const char *file_name, Line (*line_search)(Bitmap *bmp)) {
     /* load bitmap */
     Bitmap bmp = {0};
     {
-        BitmapRaw raw = {0};
-        Error err = bmp_load(file_name, &raw);
-        if (err.err) {
-            bmp_raw_dtor(&raw);
+        BitmapLoader loader = bmp_loader_ctor(file_name);
+        Error err = bmp_loader_load(&loader);
+        if (err.code) {
+            bmp_loader_dtor(&loader);
             return err;
         }
-        bmp = bmp_ctor(&raw);
+        bmp = bmp_loader_get_bitmap(&loader);
     }
 
     /* scan for longest line */
@@ -411,7 +440,7 @@ HLine command_hline_search(Bitmap *bmp) {
 
 /** @brief scans for longest vertical line */
 VLine command_vline_search(Bitmap *bmp) {
-    // todo: will there always vertical line ???
+    // todo: will there always be vertical line ???
     VLine max = {0};
     for (uint32_t i = 0; i < bmp->dimensions.width; i++) {
         scan_for_vline(bmp_it_ctor(
@@ -472,6 +501,7 @@ Error command_parse(int argc, char **argv, Command *out_cmd) {
                           argv[1]);
     }
 
+    /* TODO !!!!! */
 /* convenient macro for cmd member data assingment (command parse function-only)
  */
 #define register_cmd(cmd, cmd_type, cmd_file_name) \
@@ -510,23 +540,23 @@ int main(int argc, char **argv) {
     Command cmd = {0};
     {
         Error err = command_parse(argc, argv, &cmd);
-        if (err.err) {
-            error_dispatch(err);
-            error_dtor(err);
-            return err.err;
+        if (err.code) {
+            error_print(err);
+            error_dtor(&err);
+            return err.code;
         }
-        error_dtor(err);
+        error_dtor(&err);
     }
 
     /* execute given command */
     {
         Error err = command_execute(&cmd);
-        if (err.err) {
-            error_dispatch(err);
-            error_dtor(err);
-            return err.err;
+        if (err.code) {
+            error_print(err);
+            error_dtor(&err);
+            return err.code;
         }
-        error_dtor(err);
+        error_dtor(&err);
     }
 
     printf("exiting...");
