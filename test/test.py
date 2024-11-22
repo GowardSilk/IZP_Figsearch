@@ -5,7 +5,7 @@ import random
 from time import time
 import os
 
-DEF_BMP_SIZE = (1920, 1080)
+DEF_BMP_SIZE = (100, 100)
 N_TESTS: int = 100
 
 
@@ -112,7 +112,7 @@ class Line:
         return self.end.x - self.begin.x
 
     def __str__(self) -> str:
-        return f"{self.begin.y} {self.begin.x} {self.end.y} {self.end.x}"
+        return f"{self.begin.x} {self.begin.y} {self.end.x} {self.end.y}"
 
 
 def cmd_hline(cmd_type: str, exec: str) -> None:
@@ -160,15 +160,15 @@ def cmd_hline(cmd_type: str, exec: str) -> None:
                     hlines.pop()
 
                 file.write(' '.join(hlines_str) + "\n")
-            
+
             return max_line
 
     def _run_unit_time(exec: str) -> float:
         bmp: str = f"pics/bmp_{random.randint(0, 10000)}"
         _generate_bmp(BitmapSize(), bmp)
-        print([exec, "test", bmp])
+        print([exec, "hline", bmp])
         begin = time()
-        ret = subprocess.run([exec, "test", bmp])
+        ret = subprocess.run([exec, "hline", bmp])
         end = time()
         if ret.returncode != 0:
             raise Exception(
@@ -181,7 +181,7 @@ def cmd_hline(cmd_type: str, exec: str) -> None:
         bmp: str = f"pics/bmp_{random.randint(0, 10000)}"
         max_line: Line = _generate_bmp(BitmapSize(), bmp)
         print([exec, "hline", bmp])
-        ret = subprocess.run([exec, "test", bmp])
+        ret = subprocess.run([exec, "hline", bmp])
         if ret.returncode != 0:
             print(
                 f"Test \x1b[31mfailed\x1b[0m! {exec} returned: {ret.returncode}; expected: 0"
