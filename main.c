@@ -103,8 +103,8 @@ typedef struct BitmapLoader {
  * working with linear bitmap array
  */
 typedef struct BitmapDataIterator {
-    Pixel *begin;
-    Pixel *end;
+    Pixel *current;
+    const Pixel *end;
     size_t offset;
 } BitmapDataIterator;
 
@@ -114,18 +114,26 @@ static inline size_t bmp_size_raw(BitmapSize dimension) {
 
 /* TODO: what about the naming for the constructors ? And the prefix *bmp ????
  */
-BitmapDataIterator bmp_it_ctor(Pixel *begin, uint32_t length, uint32_t offset) {
+static inline BitmapDataIterator bmp_it_ctor(Pixel *begin, size_t length,
+                                             size_t offset) {
     return (BitmapDataIterator){begin, begin + length, offset};
 }
 
-BitmapDataIterator *bmp_it_move(BitmapDataIterator *it) {
-    if (it->begin + it->offset < it->end) {
-        it->begin += it->offset;
-    } else {
-        // note: is it fine to "damp" the iterator or should we throw ???
-        it->begin = it->end;
+static inline BitmapDataIterator *bmp_it_peek(BitmapDataIterator *it) {
+    if (it->current + it->offset < it->end) {
+        return it;
     }
-    return it;
+    return NULL;
+}
+
+static inline BitmapDataIterator *bmp_it_next(BitmapDataIterator *it) {
+    if (bmp_it_peek(it)) {
+        it->current += it->offset;
+        return it;
+    }
+
+    it->current = (void *)it->end;
+    return NULL;
 }
 
 Bitmap bmp_ctor(BitmapSize dimensions) {
@@ -181,7 +189,11 @@ BitmapLoader *bmp_loader_add_pixel(BitmapLoader *loader, Pixel c) {
 }
 
 static inline bool bmp_valid_whitespace(char c) { return isspace(c); }
-static inline bool bmp_valid_pix(Pixel c) { return c == '1' || c == '0'; }
+#define PXL_FILLED ('1')
+#define PXL_EMPTY ('0')
+static inline bool bmp_valid_pix(Pixel c) {
+    return c == PXL_FILLED || c == PXL_EMPTY;
+}
 
 Error bmp_loader_ignore_whitespace(FILE *file, BitmapLoader *loader) {
     int c = fgetc(file);
@@ -198,7 +210,7 @@ Error bmp_loader_ignore_whitespace(FILE *file, BitmapLoader *loader) {
             continue;
         }
         return error_ctor(ERR_INVALID_BITMAP_FILE,
-                          "Unexpected character encountered: '%c'", (char)c);
+                          "Unexpected character encountered: '%c'", c);
     }
     return error_none();
 }
@@ -252,6 +264,16 @@ Error bmp_loader_load(BitmapLoader *loader) {
         fclose(file);
         return err;
     }
+    if (loader->size != bmp_size_raw(loader->staging.dimensions)) {
+        fclose(file);
+        return error_ctor(ERR_INVALID_DIMENSION,
+                          "The number of pixels found (%zu) is not the same as "
+                          "defined in the header size (%" PRIu32 "x%" PRIu32
+                          "=%" PRIu32 ")\n",
+                          loader->size, loader->staging.dimensions.height,
+                          loader->staging.dimensions.width,
+                          bmp_size_raw(loader->staging.dimensions));
+    }
 
     /* free resources upon function leave */
     fclose(file);
@@ -294,8 +316,9 @@ HLine scan_for_hline_internal(BitmapDataIterator *it, const uint32_t curr_row,
     Point start = {.x = *col_counter, .y = curr_row};
     Point end = start;
 
-    for (; it->begin < it->end && *(it->begin) == '1'; (*col_counter)++) {
-        bmp_it_move(it);
+    for (; it->current < it->end && *(it->current) == PXL_FILLED;
+         (*col_counter)++) {
+        bmp_it_next(it);
         end.x++;
     }
 
@@ -309,7 +332,7 @@ HLine scan_for_hline_internal(BitmapDataIterator *it, const uint32_t curr_row,
 void scan_for_hline(BitmapDataIterator it, const uint32_t curr_row,
                     HLine *out_max) {
     uint32_t col_counter = 0;
-    for (; it.begin < it.end; bmp_it_move(&it), col_counter++) {
+    for (; it.current < it.end; bmp_it_next(&it), col_counter++) {
         HLine max = scan_for_hline_internal(&it, curr_row, &col_counter);
         if (hline_length(*out_max) < hline_length(max)) {
             *out_max = max;
@@ -323,8 +346,9 @@ VLine scan_for_vline_internal(BitmapDataIterator *it, const uint32_t curr_col,
     Point end = start;
 
     (*row_counter)++;
-    for (; it->begin < it->end && *(it->begin) == '1'; (*row_counter)++) {
-        bmp_it_move(it);
+    for (; it->current < it->end && *(it->current) == PXL_FILLED;
+         (*row_counter)++) {
+        bmp_it_next(it);
         end.y++;
     }
 
@@ -334,12 +358,38 @@ VLine scan_for_vline_internal(BitmapDataIterator *it, const uint32_t curr_col,
 void scan_for_vline(BitmapDataIterator it, const uint32_t curr_col,
                     VLine *out_max) {
     uint32_t row_counter = 0;
-    for (; it.begin < it.end; bmp_it_move(&it)) {
+    for (; it.current < it.end; bmp_it_next(&it)) {
         VLine max = scan_for_vline_internal(&it, curr_col, &row_counter);
         if (vline_length(*out_max) < vline_length(max)) {
             *out_max = max;
         }
     }
+}
+
+/* =========================================
+ *                  Square
+ * ========================================= */
+
+typedef struct Square {
+    Point left_up, right_down;
+} Square;
+
+static inline Square square_ctor(Point left_up, Point right_down) {
+    return (Square){left_up, right_down};
+}
+
+/**
+ * @brief compares squares based on their side length
+ * @note this function implicitly assumes that given arguments are squares
+ * @return <0 when s1<s2; =0 when s1==s2; >0 when s1>s2;
+ */
+static inline int square_cmp(Square s1, Square s2) {
+    return (s1.right_down.y - s1.left_up.y) - (s2.right_down.y - s2.left_up.y);
+}
+
+static inline void square_print(Square s1) {
+    printf("%" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 "\n", s1.left_up.y,
+           s1.left_up.x, s1.right_down.y, s1.right_down.x);
 }
 
 /* =========================================
@@ -394,7 +444,6 @@ Error cmd_display_help_message(void) {
 /**
  * @brief executes "test" figsearch command by trying to load the bitmap file
  * @return ERR_INVALID_BITMAP_FILE with message "Invalid"
- * @see bmp_load when bmp raw param is set to NULL
  */
 static inline Error cmd_validate_bitmap_file(const char *file_name) {
     BitmapLoader temp = bmp_loader_ctor(file_name);
@@ -445,6 +494,8 @@ Error cmd_execute_search_line(const char *file_name,
 HLine cmd_find_longest_hline(Bitmap *bmp) {
     HLine max = {0};
     for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
+        /* TODO: Fix that the iterators hits more than one time per row the end
+         * of the line */
         scan_for_hline(bmp_it_ctor(bmp->data + row * bmp->dimensions.width,
                                    bmp->dimensions.width, 1),
                        row, &max);
@@ -456,11 +507,125 @@ HLine cmd_find_longest_hline(Bitmap *bmp) {
 VLine cmd_find_longest_vline(Bitmap *bmp) {
     VLine max = {0};
     for (uint32_t col = 0; col < bmp->dimensions.width; col++) {
-        scan_for_vline(bmp_it_ctor(bmp->data + col, bmp->dimensions.height,
-                                   bmp->dimensions.width),
-                       col, &max);
+        scan_for_vline(
+            bmp_it_ctor(bmp->data + col,
+                        (bmp->dimensions.height - 1) * bmp->dimensions.width,
+                        bmp->dimensions.width),
+            col, &max);
     }
     return max;
+}
+
+/**
+ * @note function assumes that the "start" point is of PXL_FILLED value! */
+Line move_along_orthogonal_square_sides(Point start, BitmapDataIterator *hor_it,
+                                        BitmapDataIterator *ver_it) {
+    Line l = line_ctor(start, start);
+
+    /* iterate while both iterators are valid and point to filled pixels */
+    for (;;) {
+        /* check horizontal iterator */
+        if (bmp_it_peek(hor_it) == NULL ||
+            *(hor_it->current + hor_it->offset) != PXL_FILLED) {
+            break;
+        }
+
+        /* check vertical iterator */
+        if (bmp_it_peek(ver_it) == NULL ||
+            *(ver_it->current + ver_it->offset) != PXL_FILLED) {
+            break;
+        }
+
+        /* advance both iterators */
+        bmp_it_next(hor_it);
+        bmp_it_next(ver_it);
+
+        l.begin.x++;
+        l.end.y++;
+    }
+
+    return l;
+}
+
+/**
+ * @brief scans whether a given Point is a Square (1x1) or is a left anchor
+ * (Square::left_up) in a larger square
+ * @return false when no such square was found, true when square was found (its
+ * memory is written to "out_square")
+ */
+bool scan_for_square(const Bitmap *bmp, Point left_up, Square *out_square) {
+    /* note: because of the possibility that the square has the minimum
+     * size of 1x1, we cannot check for an anchor, just a pixel */
+    if (bmp->data[left_up.y * bmp->dimensions.width + left_up.x] ==
+        PXL_FILLED) {
+        printf("---------\n");
+        /* store the initial ver[tical] and hor[izontal] iterator */
+        const char *begin =
+            &bmp->data[left_up.y * bmp->dimensions.width + left_up.x];
+        BitmapDataIterator hor_it =
+            bmp_it_ctor((void *)begin, bmp->dimensions.width - left_up.x, 1);
+        BitmapDataIterator ver_it = bmp_it_ctor(
+            (void *)begin,
+            (bmp->dimensions.height - left_up.y) * bmp->dimensions.width,
+            bmp->dimensions.width);
+
+        printf("Square left_up point: %d %d\n", left_up.y, left_up.x);
+
+        /* move the iterators horizontally and vertically, creating a
+         * hypotenuse == diagonal of the (potential) square */
+        Line diagonal =
+            move_along_orthogonal_square_sides(left_up, &hor_it, &ver_it);
+
+        /* if we should find a square, we can predict where the next
+         * square point (Square::right_down) will be */
+        Point expected_right_down = {
+            .x = diagonal.begin.x,
+            .y = diagonal.end.y,
+        };
+        printf("Expected right down square point: %d %d\n",
+               expected_right_down.y, expected_right_down.x);
+
+        /* check the same for the symmetric side (via "parallel" iterators) */
+        BitmapDataIterator par_hor_it =
+            bmp_it_ctor(ver_it.current, bmp->dimensions.width - left_up.x, 1);
+        BitmapDataIterator par_ver_it = bmp_it_ctor(
+            hor_it.current,
+            (bmp->dimensions.height - left_up.y) * bmp->dimensions.width,
+            bmp->dimensions.width);
+
+        uint32_t x_track = diagonal.end.x;
+        uint32_t y_track = diagonal.begin.y;
+        for (; bmp_it_peek(&par_hor_it) != NULL &&
+               *par_hor_it.current == PXL_FILLED && bmp_it_peek(&par_ver_it) &&
+               *par_ver_it.current == PXL_FILLED;) {
+            /* note: the iterators could potentially overflow the square since
+             * we cannot know whether or not the squares have distinct
+             * sides/anchors */
+            if (expected_right_down.x == x_track &&
+                expected_right_down.y == y_track) {
+                break;
+            }
+            x_track++;
+            y_track++;
+            bmp_it_next(&par_hor_it);
+            bmp_it_next(&par_ver_it);
+        }
+        printf("X_Track: %u; Y_Track: %u\n", x_track, y_track);
+
+        if (expected_right_down.x == x_track &&
+            expected_right_down.y == y_track) {
+            /* TODO: cleanup this messaging mess */
+            Square square = square_ctor(left_up, expected_right_down);
+            printf("Found square! Coordinates are: ");
+            square_print(square);
+            *out_square = square_ctor(left_up, expected_right_down);
+            printf("---------\n");
+            return true;
+        }
+        printf("---------\n");
+    }
+
+    return false;
 }
 
 /** @brief scans for the biggest square */
@@ -477,14 +642,25 @@ Error cmd_find_biggest_square(const char *file_name) {
         bmp = bmp_loader_get_bitmap(&loader);
     }
 
-    /* scan for biggest square */
-    // for row in rows
-    // if pxl set not in next column -> skip till new hline
-    // else -> send vertical iterator to measure the length
-    //      if equal to the horizontal -> scan the next side
-    //      else -> skip till new hline
+    /* search for biggest square */
+    Square max = {0}, scanned = {0};
+    for (uint32_t row = 0; row < bmp.dimensions.height; row++) {
+        /* for every pixel in the row, check whether this pixel extends
+         * to orthogonal sides of a square (or itself in case of 1x1) */
+        for (uint32_t col = 0; col < bmp.dimensions.width; col++) {
+            bool found = scan_for_square(&bmp, (Point){col, row}, &scanned);
+
+            /* if any square was found, compare to the currrent maximum */
+            if (found) {
+                if (square_cmp(max, scanned) > 0) {
+                    max = scanned;
+                }
+            }
+        }
+    }
 
     /* print results */
+    square_print(max);
 
     /* cleanup */
     bmp_dtor(&bmp);
@@ -511,9 +687,12 @@ Error cmd_execute(UserCommand *cmd) {
                       __LINE__);
 }
 
+#define CMD_MAX_ARGS 3
+#define CMD_MIN_ARGS 2
+
 Error cmd_parse(int argc, char **argv, UserCommand *out_cmd) {
     /* ensure that the command is of correct size */
-    if (argc > 3 || argc < 2) {
+    if (argc > CMD_MAX_ARGS || argc < CMD_MIN_ARGS) {
         return error_ctor(
             ERR_INVALID_NUMBER_ARGS,
             "Invalid number of arguments given! Expected: "
@@ -522,7 +701,7 @@ Error cmd_parse(int argc, char **argv, UserCommand *out_cmd) {
     }
 
     /* validate command args */
-    if (argc == 2) /* HELP command */ {
+    if (argc == CMD_MIN_ARGS) /* HELP command */ {
         if (strcmp(argv[1], "--help") == 0) {
             out_cmd->action_type = HELP;
             return error_none();
