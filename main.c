@@ -491,11 +491,9 @@ typedef struct Square {
 static inline Square square_ctor(Point left_up, Point right_down) {
     return (Square){left_up, right_down};
 }
-
 static inline Square square_invalid() {
     return square_ctor(point_invalid(), point_invalid());
 }
-
 static inline bool square_is_invalid(Square s) {
     return point_is_invalid(s.left_up) && point_is_invalid(s.right_down);
 }
@@ -708,7 +706,11 @@ static Error cmd_execute_search_line(const char *file_name,
     /* scan for longest line */
     Line max_line = line_search(&bmp);
     /* print results */
-    line_print(max_line);
+    if (line_is_invalid(max_line)) {
+        printf("Not found\n");
+    } else {
+        line_print(max_line);
+    }
     /* cleanup and return */
     bmp_dtor(&bmp);
     return error_none();
@@ -748,7 +750,11 @@ static Error cmd_find_biggest_square(const char *file_name) {
         }
     }
     /* print results */
-    square_print(max);
+    if (square_is_invalid(max)) {
+        printf("Not found\n");
+    } else {
+        square_print(max);
+    }
     /* cleanup and return */
     bmp_dtor(&bmp);
     return error_none();
