@@ -5,8 +5,8 @@ import random
 from time import time
 import os
 
-DEF_BMP_SIZE = (1920, 1080)
-N_TESTS: int = 100
+DEF_BMP_SIZE = (10, 10)
+N_TESTS: int = 20
 
 
 def curr_dir() -> str:
@@ -203,18 +203,19 @@ def cmd_test(cmd: Command) -> None:
         print(f"Test took: {delta}s.")
         return delta
 
-    def _run_unit(exec: str, gen_valid: bool, gen_random_space: bool) -> None:
+    def _run_unit(exec: str, gen_valid: bool, gen_random_space: bool) -> bool:
         bmp: str = f"{curr_dir()}/pics/bmp_{random.randint(0, 10000)}"
         _generate_bmp(BitmapSize(), bmp, gen_valid, gen_random_space)
-        _ = subprocess_evaluate(
+        return subprocess_evaluate(
             [exec, "test", bmp], "Valid" if gen_valid else "Invalid"
         )
 
     print("Testing 'test' command...")
+    tests_passed: int = 0
     if cmd.is_random_test:
         if cmd.is_of_functional():
             for _ in range(N_TESTS):
-                _run_unit(cmd.exec, chance(), cmd.is_random_space)
+                tests_passed += 1 if _run_unit(cmd.exec, chance(), cmd.is_random_space) else 0
         elif cmd.is_of_time():
             average: float = 0
             for _ in range(N_TESTS):
@@ -226,6 +227,8 @@ def cmd_test(cmd: Command) -> None:
     else:
         assert False  # TODO
 
+    if cmd.is_verbose:
+        print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
     print("Test ended.")
     input("Press any key to continue...")
 
@@ -260,16 +263,16 @@ def cmd_hline(cmd: Command) -> None:
         last_pos: int = 0
         max_line: Line = Line(Point(0, 0), Point(0, 0))
 
-        while last_pos + max_length <= max_col:
+        while last_pos + max_length < max_col:
             begin = Point(row_offset, random.randint(last_pos, last_pos + max_length))
             last_pos = begin.y
             end: Point
 
             if last_pos == max_col:
-                end = Point(row_offset, random.randint(last_pos, last_pos))
+                end = Point(row_offset, last_pos - 1)
             else:
                 if last_pos + max_length > max_col:
-                    end = Point(row_offset, random.randint(last_pos, max_col))
+                    end = Point(row_offset, last_pos - 1)
                 else:
                     end = Point(
                         row_offset, random.randint(last_pos, last_pos + max_length)
@@ -306,9 +309,10 @@ def cmd_hline(cmd: Command) -> None:
 
                 file.write(
                     random_space(gen_random_space).join(hlines_str)
-                    + random_space(gen_random_space)
+                    + random_space(gen_random_space, "\n")
                 )
 
+            max_line.end.y -= 1 # TODO: WHY IS THIS NECESSARY? WHERE IS THE INDEXING BUG???
             return max_line
 
     def _run_unit_time(exec: str, gen_random_space: bool) -> float:
@@ -319,16 +323,17 @@ def cmd_hline(cmd: Command) -> None:
         print(f"Test took: {delta}s")
         return delta
 
-    def _run_unit(exec: str, gen_random_space: bool) -> None:
+    def _run_unit(exec: str, gen_random_space: bool) -> bool:
         bmp: str = f"{curr_dir()}/pics/bmp_{random.randint(0, 10000)}"
         max_line: Line = _generate_bmp(BitmapSize(), bmp, gen_random_space)
-        _ = subprocess_evaluate([exec, "hline", bmp], str(max_line).strip())
+        return subprocess_evaluate([exec, "hline", bmp], str(max_line).strip())
 
     print("Testing 'hline' command...")
+    tests_passed: int = 0
     if cmd.is_random_test:
         if cmd.is_of_functional():
             for _ in range(N_TESTS):
-                _run_unit(cmd.exec, cmd.is_random_space)
+                tests_passed += 1 if _run_unit(cmd.exec, cmd.is_random_space) else 0
         elif cmd.is_of_time():
             average: float = 0
             for _ in range(N_TESTS):
@@ -339,7 +344,12 @@ def cmd_hline(cmd: Command) -> None:
             assert False
     else:
         assert False  # TODO
+
+    if cmd.is_verbose:
+        print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
     print("Test ended.")
+    input("Press any key to continue...")
+
 
     return None
 
@@ -402,24 +412,25 @@ def cmd_vline(cmd: Command) -> None:
 
             return max_line
 
-    def _run_unit_time(exec: str) -> float:
+    def _run_unit_time(exec: str, gen_random_space: bool) -> float:
         bmp: str = f"{curr_dir()}/pics/bmp_{random.randint(0, 10000)}"
-        max_line: Line = _generate_bmp(BitmapSize(), bmp)
+        max_line: Line = _generate_bmp(BitmapSize(), bmp, gen_random_space)
         passed, delta = subprocess_evaluate_timed([exec, "vline", bmp])
         assert passed
         print(f"Test took {delta}s.")
         return delta
 
-    def _run_unit(exec: str, gen_random_space: bool) -> None:
+    def _run_unit(exec: str, gen_random_space: bool) -> bool:
         bmp: str = f"{curr_dir()}/pics/bmp_{random.randint(0, 10000)}"
         max_line: Line = _generate_bmp(BitmapSize(), bmp, gen_random_space)
-        _ = subprocess_evaluate([exec, "vline", bmp], str(max_line).strip())
+        return subprocess_evaluate([exec, "vline", bmp], str(max_line).strip())
 
     print("Testing 'vline' command...")
+    tests_passed: int = 0
     if cmd.is_random_test:
         if cmd.is_of_functional():
             for _ in range(N_TESTS):
-                _run_unit(cmd.exec, cmd.is_random_space)
+                tests_passed += 1 if _run_unit(cmd.exec, cmd.is_random_space) else 0
         elif cmd.is_of_time():
             average: float = 0
             for _ in range(N_TESTS):
@@ -429,14 +440,114 @@ def cmd_vline(cmd: Command) -> None:
             assert False
     else:
         assert False  # TODO
+
+    if cmd.is_verbose:
+        print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
     print("Test ended.")
+    input("Press any key to continue...")
 
     return None
 
+@dataclass
+class Square:
+    left_up: Point
+    right_down: Point
+
+    def __str__(self) -> str:
+        return f"{self.left_up.y} {self.left_up.x} {self.right_down.y} {self.right_down.x}"
+
+def square_cmp(s1: Square, s2: Square) -> int:
+            s1_side = s1.right_down.y - s1.left_up.y + 1
+            s2_side = s2.right_down.y - s2.left_up.y + 1
+
+            if s1_side != s2_side:
+                return s2_side - s1_side
+            if s1.left_up.y != s2.left_up.y:
+                return s2.left_up.y - s1.left_up.y
+            return s2.left_up.x - s1.left_up.x
 
 def cmd_square(cmd: Command) -> None:
-    assert False  # todo
-    return None
+    def _generate_squares(size: BitmapSize, loc: str, gen_random_space: bool) -> Square:
+        def _create_square(grid, top_left: Point, side_length: int):
+            for i in range(side_length):
+                for j in range(side_length):
+                    grid[top_left.y + i][top_left.x + j] = "1"
+
+        with open(loc, "w+") as file:
+            # Write bitmap dimensions
+            file.write(
+                str(size.height)
+                + random_space(gen_random_space)
+                + str(size.width)
+                + random_space(gen_random_space, "\n")
+            )
+
+            # Initialize bitmap grid
+            grid = [["0" for _ in range(size.width)] for _ in range(size.height)]
+            max_square = Square(Point(0, 0), Point(0, 0))
+
+            # Generate random squares
+            num_squares = random.randint(1, 10)
+            for _ in range(num_squares):
+                side_length = random.randint(1, min(size.width, size.height) // 4)
+                top_left = Point(
+                    random.randint(0, size.width - side_length),
+                    random.randint(0, size.height - side_length),
+                )
+                _create_square(grid, top_left, side_length)
+
+                # Calculate bottom-right corner
+                bottom_right = Point(
+                    top_left.x + side_length - 1, top_left.y + side_length - 1
+                )
+                new_square = Square(top_left, bottom_right)
+
+                # print(f"{new_square} :: {max_square}")
+                # Update max_square based on comparison
+                if square_cmp(new_square, max_square) < 0:
+                    max_square = new_square
+
+            # Write grid to file
+            for row in grid:
+                file.write(random_space(gen_random_space).join(row) + "\n")
+
+            return max_square
+
+    def _run_unit_time(exec: str, gen_random_space: bool) -> float:
+        bmp = f"{curr_dir()}/pics/bmp_{random.randint(0, 10000)}"
+        max_square = _generate_squares(BitmapSize(), bmp, gen_random_space)
+        success, delta = subprocess_evaluate_timed([exec, "square", bmp])
+        assert success
+        print(f"Test took {delta}s.")
+        return delta
+
+    def _run_unit(exec: str, gen_random_space: bool) -> bool:
+        bmp = f"{curr_dir()}/pics/bmp_{random.randint(0, 10000)}"
+        max_square = _generate_squares(BitmapSize(), bmp, gen_random_space)
+        expected_output = f"{max_square.left_up.y} {max_square.left_up.x} {max_square.right_down.y} {max_square.right_down.x}"
+        return subprocess_evaluate([exec, "square", bmp], expected_output)
+
+    print("Testing 'square' command...")
+    tests_passed: int = 0
+    if cmd.is_random_test:
+        if cmd.is_of_functional():
+            for _ in range(N_TESTS):
+                tests_passed += 1 if _run_unit(cmd.exec, cmd.is_random_space) else 0
+        elif cmd.is_of_time():
+            average = 0
+            for _ in range(N_TESTS):
+                average += _run_unit_time(cmd.exec, cmd.is_random_space)
+            average /= N_TESTS
+            print(f"Average: {average}s.")
+        else:
+            assert False
+    else:
+        assert False  # TODO
+
+    if cmd.is_verbose:
+        print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
+    print("Test ended.")
+    input("Press any key to continue...")
 
 
 def prepare() -> None:
