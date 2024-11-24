@@ -13,18 +13,18 @@
  *                Constants
  * ========================================= */
 
-#define ERR_NONE                (0)
-#define ERR_ALLOCATION_FAILURE  (0x00FA75E5)
-#define ERR_INTERNAL            (0x000000B5)
+#define ERR_NONE (0)
+#define ERR_ALLOCATION_FAILURE (0x00FA75E5)
+#define ERR_INTERNAL (0x000000B5)
 #define ERR_INVALID_NUMBER_ARGS (0xB16B00B5)
-#define ERR_INVALID_COMMAND     (0xBAADF00D)
+#define ERR_INVALID_COMMAND (0xBAADF00D)
 #define ERR_INVALID_BITMAP_FILE (0xDEADBAAD)
-#define ERR_READ_RAW_BITMAP     (0x0BAD8EAD)
-#define ERR_BITMAP_TEST         (0x8BADF00D)
-#define ERR_INVALID_DIMENSION   (0xABADBABE)
+#define ERR_READ_RAW_BITMAP (0x0BAD8EAD)
+#define ERR_BITMAP_TEST (0x8BADF00D)
+#define ERR_INVALID_DIMENSION (0xABADBABE)
 
 #define PXL_FILLED ('1')
-#define PXL_EMPTY  ('0')
+#define PXL_EMPTY ('0')
 
 #define CMD_MAX_ARGS (3)
 #define CMD_MIN_ARGS (2)
@@ -36,7 +36,7 @@
 typedef int ErrorNum;
 typedef struct Error {
     ErrorNum code;
-    char    *msg;
+    char *msg;
 } Error;
 
 static Error error_ctor(ErrorNum err, const char *fmt, ...) {
@@ -85,7 +85,7 @@ typedef struct BitmapSize {
     uint32_t height;
 } BitmapSize;
 
-typedef char   Pixel;
+typedef char Pixel;
 typedef Pixel *BitmapData;
 
 typedef struct Bitmap {
@@ -110,9 +110,9 @@ typedef struct BitmapLoader {
  * @note this can be modelled for horizontal as well as vertical since we are
  * working with linear bitmap array (@see BitmapData) */
 typedef struct BitmapDataIterator {
-    Pixel       *current;
+    Pixel *current;
     const Pixel *end;
-    size_t       offset;
+    size_t offset;
 } BitmapDataIterator;
 
 /**
@@ -228,21 +228,27 @@ static inline bool bmp_valid_pix(Pixel c) {
  * encountered */
 static Error bmp_loader_ignore_whitespace(FILE *file,
                                           BitmapLoader *restrict loader) {
-    int c = fgetc(file);
-    for (; c != EOF; c = fgetc(file)) {
-        if (bmp_valid_whitespace(c)) {
-            continue;
-        }
-        if (bmp_valid_pix(c)) {
-            if (!bmp_loader_add_pixel(loader, c)) {
-                return error_ctor(
-                    ERR_INVALID_BITMAP_FILE,
-                    "The raw bitmap size does not match given dimensions!");
+    /* buffered reading */
+    while (!feof(file)) {
+        char buffer[256] = {0};
+        size_t read =
+            fread(&buffer, sizeof(char), sizeof(buffer) / sizeof(char), file);
+        for (size_t i = 0; i < read; i++) {
+            if (bmp_valid_whitespace(buffer[i])) {
+                continue;
             }
-            continue;
+            if (bmp_valid_pix(buffer[i])) {
+                if (!bmp_loader_add_pixel(loader, buffer[i])) {
+                    return error_ctor(ERR_INVALID_BITMAP_FILE,
+                                      "the raw bitmap size does not match given"
+                                      "dimensions!");
+                }
+                continue;
+            }
+            return error_ctor(ERR_INVALID_BITMAP_FILE,
+                              "unexpected character encountered: '%c'",
+                              buffer[i]);
         }
-        return error_ctor(ERR_INVALID_BITMAP_FILE,
-                          "Unexpected character encountered: '%c'", c);
     }
     return error_none();
 }
@@ -250,7 +256,7 @@ static Error bmp_loader_ignore_whitespace(FILE *file,
 /**
  * @brief loads bitmap dimension into out_dimension
  * @return error_none when loaded successfully, otherwsise Error::code > 0 */
-static inline Error bmp_loader_load_dimension(FILE     *file,
+static inline Error bmp_loader_load_dimension(FILE *file,
                                               uint32_t *out_dimension) {
     int ret = fscanf(file, "%" PRIu32, out_dimension);
     if (ret != 1) {
@@ -287,7 +293,7 @@ static Error bmp_loader_load(BitmapLoader *restrict loader) {
     }
     /* load the data size from file */
     BitmapSize size = {0};
-    Error      err = bmp_loader_load_size(file, &size);
+    Error err = bmp_loader_load_size(file, &size);
     if (err.code != ERR_NONE) {
         fclose(file);
         return err;
@@ -424,7 +430,7 @@ static VLine scan_for_vline(BitmapDataIterator *ver_it, const uint32_t curr_col,
 
 /** @brief scans for longest horizontal line */
 static HLine find_longest_hline(Bitmap *bmp) {
-    HLine              max = line_invalid(), temp = {0};
+    HLine max = line_invalid(), temp = {0};
     BitmapDataIterator hor_it = {0};
     /* scan each row */
     for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
@@ -452,7 +458,7 @@ static HLine find_longest_hline(Bitmap *bmp) {
 
 /** @brief scans for longest vertical line */
 static VLine find_longest_vline(Bitmap *bmp) {
-    VLine              max = line_invalid(), scanned = {0};
+    VLine max = line_invalid(), scanned = {0};
     BitmapDataIterator ver_it = {0};
     /* scan each column */
     for (uint32_t col = 0; col < bmp->dimensions.width; col++) {
@@ -523,7 +529,7 @@ static inline void square_print(Square s1) {
 
 /**
  * @note function assumes that the "start" point is of PXL_FILLED value! */
-static Line move_along_orthogonal_square_sides(Point               start,
+static Line move_along_orthogonal_square_sides(Point start,
                                                BitmapDataIterator *hor_it,
                                                BitmapDataIterator *ver_it) {
     Line l = line_ctor(start, start);
@@ -633,7 +639,7 @@ typedef enum UserCommandAction {
 
 typedef struct UserCommand {
     UserCommandAction action_type;
-    const char       *file_name;
+    const char *file_name;
 } UserCommand;
 
 static const char *HELP_MESSAGE =
@@ -696,7 +702,7 @@ static Error cmd_execute_search_line(const char *file_name,
     Bitmap bmp = {0};
     {
         BitmapLoader loader = bmp_loader_ctor(file_name);
-        Error        err = bmp_loader_load(&loader);
+        Error err = bmp_loader_load(&loader);
         if (err.code != ERR_NONE) {
             bmp_loader_dtor(&loader);
             return err;
@@ -722,7 +728,7 @@ static Error cmd_find_biggest_square(const char *file_name) {
     Bitmap bmp = {0};
     {
         BitmapLoader loader = bmp_loader_ctor(file_name);
-        Error        err = bmp_loader_load(&loader);
+        Error err = bmp_loader_load(&loader);
         if (err.code != ERR_NONE) {
             bmp_loader_dtor(&loader);
             return err;
