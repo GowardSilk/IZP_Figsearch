@@ -13,18 +13,18 @@
  *                Constants
  * ========================================= */
 
-#define ERR_NONE (0)
-#define ERR_ALLOCATION_FAILURE (0x00FA75E5)
-#define ERR_INTERNAL (0x000000B5)
+#define ERR_NONE                (0)
+#define ERR_ALLOCATION_FAILURE  (0x00FA75E5)
+#define ERR_INTERNAL            (0x000000B5)
 #define ERR_INVALID_NUMBER_ARGS (0xB16B00B5)
-#define ERR_INVALID_COMMAND (0xBAADF00D)
+#define ERR_INVALID_COMMAND     (0xBAADF00D)
 #define ERR_INVALID_BITMAP_FILE (0xDEADBAAD)
-#define ERR_READ_RAW_BITMAP (0x0BAD8EAD)
-#define ERR_BITMAP_TEST (0x8BADF00D)
-#define ERR_INVALID_DIMENSION (0xABADBABE)
+#define ERR_READ_RAW_BITMAP     (0x0BAD8EAD)
+#define ERR_BITMAP_TEST         (0x8BADF00D)
+#define ERR_INVALID_DIMENSION   (0xABADBABE)
 
 #define PXL_FILLED ('1')
-#define PXL_EMPTY ('0')
+#define PXL_EMPTY  ('0')
 
 #define CMD_MAX_ARGS (3)
 #define CMD_MIN_ARGS (2)
@@ -38,7 +38,7 @@
 typedef int ErrorNum;
 typedef struct Error {
     ErrorNum code;
-    char *msg;
+    char    *msg;
 } Error;
 
 static Error error_ctor(ErrorNum err, const char *fmt, ...) {
@@ -87,7 +87,7 @@ typedef struct BitmapSize {
     uint32_t height;
 } BitmapSize;
 
-typedef char Pixel;
+typedef char   Pixel;
 typedef Pixel *BitmapData;
 
 typedef struct Bitmap {
@@ -108,51 +108,9 @@ typedef struct BitmapLoader {
 } BitmapLoader;
 
 /**
- * @brief designed for iterations over BitmapData
- * @note this can be modelled for horizontal as well as vertical since we are
- * working with linear bitmap array (@see BitmapData) */
-typedef struct BitmapDataIterator {
-    Pixel *current;
-    const Pixel *end;
-    size_t offset;
-} BitmapDataIterator;
-
-/**
  * @return linear size of the bitmap data from given dimensions */
 static inline size_t bmp_size_raw(BitmapSize dimension) {
     return (size_t)dimension.width * dimension.height;
-}
-
-/**
- * @brief constructor for bitmap data iterator
- * @note bitmap data iterator does NOT check whether the 'length' exceed the end
- * of the bitmap data! */
-static inline BitmapDataIterator bmp_it_ctor(Pixel *begin, size_t length,
-                                             size_t offset) {
-    return (BitmapDataIterator){begin, begin + length, offset};
-}
-
-/**
- * @brief checks whether iterator will reach the end on next iteration
- * @return valid pointer when not, otherwise NULL */
-static inline BitmapDataIterator *bmp_it_peek(BitmapDataIterator *it) {
-    if (it->current + it->offset < it->end) {
-        return it;
-    }
-    return NULL;
-}
-
-/**
- * @brief moves the iterator by its offset
- * @note stops at `it->end` if overflow occurs */
-static inline BitmapDataIterator *bmp_it_next(BitmapDataIterator *it) {
-    if (bmp_it_peek(it)) {
-        it->current += it->offset;
-        return it;
-    }
-
-    it->current = (void *)it->end;
-    return NULL;
 }
 
 /**
@@ -166,6 +124,11 @@ static Error bmp_ctor(BitmapSize dimensions, Bitmap *out_bmp) {
                           "Failed to allocate bitmap data buffer!\n");
     }
     return error_none();
+}
+
+static Pixel *bmp_at(const Bitmap *bmp, uint32_t row, uint32_t col) {
+    /* todo: consider maybe dividing non-check into macro and checked here */
+    return &bmp->data[row * bmp->dimensions.width + col];
 }
 
 static void bmp_dtor(Bitmap *bmp) {
@@ -232,7 +195,7 @@ static Error bmp_loader_ignore_whitespace(FILE *file,
                                           BitmapLoader *restrict loader) {
     /* buffered reading */
     while (!feof(file)) {
-        char buffer[256] = {0};
+        char   buffer[256] = {0};
         size_t read =
             fread(&buffer, sizeof(char), sizeof(buffer) / sizeof(char), file);
         for (size_t i = 0; i < read; i++) {
@@ -258,7 +221,7 @@ static Error bmp_loader_ignore_whitespace(FILE *file,
 /**
  * @brief loads bitmap dimension into out_dimension
  * @return error_none when loaded successfully, otherwsise Error::code > 0 */
-static inline Error bmp_loader_load_dimension(FILE *file,
+static inline Error bmp_loader_load_dimension(FILE     *file,
                                               uint32_t *out_dimension) {
     int ret = fscanf(file, "%" PRIu32, out_dimension);
     if (ret != 1) {
@@ -295,7 +258,7 @@ static Error bmp_loader_load(BitmapLoader *restrict loader) {
     }
     /* load the data size from file */
     BitmapSize size = {0};
-    Error err = bmp_loader_load_size(file, &size);
+    Error      err = bmp_loader_load_size(file, &size);
     if (err.code != ERR_NONE) {
         fclose(file);
         return err;
@@ -381,81 +344,54 @@ static int line_cmp(Line lhs, Line rhs, uint32_t (*length_func)(Line line)) {
     return rhs.begin.x - lhs.begin.x;
 }
 static inline uint32_t hline_length(HLine line) {
-    return line.end.x - line.begin.x;
+    return line.end.x - line.begin.x + 1;
 }
 static inline uint32_t vline_length(VLine line) {
-    return line.end.y - line.begin.y;
+    return line.end.y - line.begin.y + 1;
 }
 
 #define hline_cmp(lhs, rhs) (line_cmp((lhs), (rhs), hline_length))
 #define vline_cmp(lhs, rhs) (line_cmp((lhs), (rhs), vline_length))
 
-/**
- * @brief searches for a horizonal line from a given iterator */
-static HLine scan_for_hline(BitmapDataIterator *hor_it, const uint32_t curr_row,
-                            uint32_t *col_counter) {
-    if (*(hor_it->current) == PXL_EMPTY) {
-        return line_invalid();
-    }
-
-    Point start = {.x = *col_counter, .y = curr_row};
-    Point end = start;
-
-    bmp_it_next(hor_it);
-    (*col_counter)++;
-    for (; hor_it->current < hor_it->end && *(hor_it->current) == PXL_FILLED;
-         (*col_counter)++) {
-        bmp_it_next(hor_it);
+static HLine line_find_hline(const Bitmap *bmp, Point begin) {
+    if (*bmp_at(bmp, begin.y, begin.x) == PXL_FILLED) {
+        Point end = begin;
         end.x++;
+        for (; end.x < bmp->dimensions.width &&
+               *bmp_at(bmp, end.y, end.x) == PXL_FILLED;
+             end.x++)
+            ;
+        end.x--;
+        return line_ctor(begin, end);
     }
-
-    return line_ctor(start, end);
+    return line_invalid();
 }
 
-/**
- * @brief searches for a vertical line from a given iterator */
-static VLine scan_for_vline(BitmapDataIterator *ver_it, const uint32_t curr_col,
-                            uint32_t *row_counter) {
-    if (*(ver_it->current) == PXL_EMPTY) {
-        return line_invalid();
-    }
-
-    Point start = {.x = curr_col, .y = *row_counter};
-    Point end = start;
-
-    /* move to the next pxl, otherwise it is just a point */
-    bmp_it_next(ver_it);
-    (*row_counter)++;
-    for (; ver_it->current < ver_it->end && *(ver_it->current) == PXL_FILLED;
-         (*row_counter)++) {
-        bmp_it_next(ver_it);
+static VLine line_find_vline(const Bitmap *bmp, Point begin) {
+    if (*bmp_at(bmp, begin.y, begin.x) == PXL_FILLED) {
+        Point end = {begin.x, begin.y};
         end.y++;
+        for (; end.y < bmp->dimensions.height &&
+               *bmp_at(bmp, end.y, end.x) == PXL_FILLED;
+             end.y++) {
+        }
+        end.y--;
+        return line_ctor(begin, end);
     }
-
-    return line_ctor(start, end);
+    return line_invalid();
 }
 
 /** @brief scans for longest horizontal line */
-static HLine find_longest_hline(Bitmap *bmp) {
+static HLine line_find_longest_hline(Bitmap *bmp) {
     HLine max = line_invalid(), temp = {0};
-    BitmapDataIterator hor_it = {0};
-    /* scan each row */
     for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
-        /* create an horizontal iterator to move through the row */
-        hor_it = bmp_it_ctor(bmp->data + row * bmp->dimensions.width,
-                             bmp->dimensions.width, 1);
-        /* find each line in a row and compare it to the max */
-        for (uint32_t col = 0; col < bmp->dimensions.width;
-             col++, bmp_it_next(&hor_it)) {
-            temp = scan_for_hline(&hor_it, row, &col);
+        for (uint32_t col = 0; col < bmp->dimensions.width; col++) {
+            temp = line_find_hline(bmp, (Point){col, row});
             if (line_is_invalid(temp)) {
                 continue;
             }
-            if (line_is_invalid(max)) {
-                max = temp;
-                continue;
-            }
-            if (hline_cmp(max, temp) < 0) {
+            col = temp.end.x;
+            if (line_is_invalid(max) || hline_cmp(max, temp) < 0) {
                 max = temp;
             }
         }
@@ -464,29 +400,23 @@ static HLine find_longest_hline(Bitmap *bmp) {
 }
 
 /** @brief scans for longest vertical line */
-static VLine find_longest_vline(Bitmap *bmp) {
-    VLine max = line_invalid(), scanned = {0};
-    BitmapDataIterator ver_it = {0};
-    /* scan each column */
+static VLine line_find_longest_vline(Bitmap *bmp) {
+    VLine max = line_invalid(), temp = {0};
     for (uint32_t col = 0; col < bmp->dimensions.width; col++) {
-        /* create an vertical iterator to move through the column */
-        ver_it = bmp_it_ctor(
-            bmp->data + col,
-            (bmp->dimensions.height - 1) * bmp->dimensions.width + col + 1,
-            bmp->dimensions.width);
-        /* find each line in a column and compare it to the max */
-        for (uint32_t row = 0; row < bmp->dimensions.height;
-             row++, bmp_it_next(&ver_it)) {
-            scanned = scan_for_vline(&ver_it, col, &row);
-            if (line_is_invalid(scanned)) {
-                continue;
-            }
-            if (line_is_invalid(max)) {
-                max = scanned;
-                continue;
-            }
-            if (vline_cmp(max, scanned) < 0) {
-                max = scanned;
+        for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
+            if (bmp->data[row * bmp->dimensions.width + col] == PXL_FILLED) {
+                uint32_t prev_row = row;
+                row++;
+                for (;
+                     row < bmp->dimensions.height &&
+                     bmp->data[row * bmp->dimensions.width + col] == PXL_FILLED;
+                     row++)
+                    ;
+                temp = line_ctor((Point){.x = col, .y = prev_row},
+                                 (Point){.x = col, .y = row - 1});
+                if (line_is_invalid(max) || vline_cmp(max, temp) < 0) {
+                    max = temp;
+                }
             }
         }
     }
@@ -494,7 +424,7 @@ static VLine find_longest_vline(Bitmap *bmp) {
 }
 
 /* =========================================
- *                  Square
+ *                  equare
  * ========================================= */
 
 typedef struct Square {
@@ -534,101 +464,82 @@ static inline void square_print(Square s1) {
            s1.left_up.x, s1.right_down.y, s1.right_down.x);
 }
 
-/**
- * @note function assumes that the "start" point is of PXL_FILLED value! */
-static Line move_along_orthogonal_square_sides(Point start,
-                                               BitmapDataIterator *hor_it,
-                                               BitmapDataIterator *ver_it) {
-    Line l = line_ctor(start, start);
-
-    /* iterate while both iterators are valid and point to filled pixels */
-    for (;;) {
-        /* check horizontal iterator */
-        if (bmp_it_peek(hor_it) == NULL ||
-            *(hor_it->current + hor_it->offset) != PXL_FILLED) {
-            break;
-        }
-
-        /* check vertical iterator */
-        if (bmp_it_peek(ver_it) == NULL ||
-            *(ver_it->current + ver_it->offset) != PXL_FILLED) {
-            break;
-        }
-
-        /* advance both iterators */
-        bmp_it_next(hor_it);
-        bmp_it_next(ver_it);
-
-        l.begin.x++;
-        l.end.y++;
-    }
-
-    return l;
+static VLine square_find_vertical_side(const Bitmap *bmp, Point ver_begin) {
+    return line_find_vline(bmp, ver_begin);
 }
 
-/**
- * @brief scans whether a given Point is a Square (1x1) or is a left anchor
- * (Square::left_up) of a larger square
- * @return false when no such square was found, true when square was found (its
- * memory is then written to "out_square") */
-static Square scan_for_square(const Bitmap *bmp, Point left_up) {
-    /* note: because of the possibility that the square has the minimum
-     * size of 1x1, we cannot check for an anchor, just a pixel */
-    if (bmp->data[left_up.y * bmp->dimensions.width + left_up.x] ==
-        PXL_FILLED) {
-        /* store the initial ver[tical] and hor[izontal] iterator */
-        const char *begin =
-            &bmp->data[left_up.y * bmp->dimensions.width + left_up.x];
-        BitmapDataIterator hor_it =
-            bmp_it_ctor((void *)begin, bmp->dimensions.width - left_up.x, 1);
-        BitmapDataIterator ver_it = bmp_it_ctor(
-            (void *)begin,
-            (bmp->dimensions.height - left_up.y) * bmp->dimensions.width,
-            bmp->dimensions.width);
+static VLine square_find_horizontal_side(const Bitmap *bmp, Point hor_begin) {
+    return line_find_hline(bmp, hor_begin);
+}
 
-        /* move the iterators horizontally and vertically, creating a
-         * hypotenuse == diagonal of the (potential) square */
-        Line diagonal =
-            move_along_orthogonal_square_sides(left_up, &hor_it, &ver_it);
-
-        /* if we should find a square, we can predict where the next
-         * square point (Square::right_down) will be */
-        Point expected_right_down = {
-            .x = diagonal.begin.x,
-            .y = diagonal.end.y,
-        };
-
-        /* check the same for the symmetric side (via "parallel" iterators) */
-        BitmapDataIterator par_hor_it =
-            bmp_it_ctor(ver_it.current, bmp->dimensions.width - left_up.x, 1);
-        BitmapDataIterator par_ver_it = bmp_it_ctor(
-            hor_it.current,
-            (bmp->dimensions.height - left_up.y) * bmp->dimensions.width,
-            bmp->dimensions.width);
-
-        Point track_right_down = {.x = diagonal.end.x, .y = diagonal.begin.y};
-        for (; bmp_it_next(&par_hor_it) != NULL &&
-               *par_hor_it.current != PXL_EMPTY &&
-               bmp_it_next(&par_ver_it) != NULL &&
-               *par_ver_it.current != PXL_EMPTY;) {
-            /* note: the iterators could potentially overflow the square since
-             * we cannot know whether or not the squares have distinct
-             * sides/anchors */
-            if (expected_right_down.x == track_right_down.x &&
-                expected_right_down.y == track_right_down.y) {
-                return square_ctor(left_up, expected_right_down);
+static Square square_find_largest_square(const Bitmap *bmp) {
+    Square max = square_invalid(), temp = {0};
+    for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
+        /* for every pixel in the row, check whether this pixel extends
+         * to orthogonal sides of a square (or itself in case of 1x1) */
+        for (uint32_t col = 0; col < bmp->dimensions.width; col++) {
+            if (*bmp_at(bmp, row, col) == PXL_EMPTY) {
+                continue;
             }
-            track_right_down.x++;
-            track_right_down.y++;
-        }
+            Point    left_up = {col, row};
+            uint32_t x_track = col, y_track = row;
+            /* search for the largest orthogonal anchor */
+            for (;;) {
+                if (x_track > bmp->dimensions.width ||
+                    *bmp_at(bmp, row, x_track) == PXL_EMPTY) {
+                    break;
+                }
 
-        if (expected_right_down.x == track_right_down.x &&
-            expected_right_down.y == track_right_down.y) {
-            return square_ctor(left_up, expected_right_down);
+                if (y_track > bmp->dimensions.height ||
+                    *bmp_at(bmp, y_track, col) == PXL_EMPTY) {
+                    break;
+                }
+
+                x_track++;
+                y_track++;
+            }
+            x_track -= 1;
+            y_track -= 1;
+            /*  */
+            Point expected_right_down = {x_track, y_track};
+            HLine hline =
+                square_find_horizontal_side(bmp, (Point){col, y_track});
+            VLine vline = square_find_vertical_side(bmp, (Point){x_track, row});
+            if (hline.end.x >= expected_right_down.x &&
+                vline.end.y >= expected_right_down.y) {
+                /* found square */
+                temp = square_ctor(left_up, expected_right_down);
+                if (square_is_invalid(max) || square_cmp(max, temp) < 0) {
+                    max = temp;
+                }
+                /* note: we do not move the col offset because there can be
+                 * other "square sides" inside the square we have found */
+                continue;
+            }
+            /*
+             * we have to search for the square "wrapped inside" the orthogonal
+             * lines note: we can decrement x_track and y_track simultaneously
+             * since they are offsetted by the same value from the left_up
+             */
+            for (; x_track >= col; x_track--, y_track--) {
+                Point expected_right_down = {x_track, y_track};
+                HLine hline =
+                    square_find_horizontal_side(bmp, (Point){col, y_track});
+                VLine vline =
+                    square_find_vertical_side(bmp, (Point){x_track, row});
+                if (hline.end.x >= expected_right_down.x &&
+                    vline.end.y >= expected_right_down.y) {
+                    /* found square */
+                    temp = square_ctor(left_up, expected_right_down);
+                    if (square_is_invalid(max) || square_cmp(max, temp) < 0) {
+                        max = temp;
+                    }
+                    break;
+                }
+            }
         }
     }
-
-    return square_invalid();
+    return max;
 }
 
 /* =========================================
@@ -645,7 +556,7 @@ typedef enum UserCommandAction {
 
 typedef struct UserCommand {
     UserCommandAction action_type;
-    const char *file_name;
+    const char       *file_name;
 } UserCommand;
 
 static const char *HELP_MESSAGE =
@@ -708,7 +619,7 @@ static Error cmd_execute_search_line(const char *file_name,
     Bitmap bmp = {0};
     {
         BitmapLoader loader = bmp_loader_ctor(file_name);
-        Error err = bmp_loader_load(&loader);
+        Error        err = bmp_loader_load(&loader);
         if (err.code != ERR_NONE) {
             bmp_loader_dtor(&loader);
             return err;
@@ -729,12 +640,12 @@ static Error cmd_execute_search_line(const char *file_name,
 }
 
 /** @brief scans for the biggest square */
-static Error cmd_find_biggest_square(const char *file_name) {
+static Error cmd_execute_search_square(const char *file_name) {
     /* load bitmap */
     Bitmap bmp = {0};
     {
         BitmapLoader loader = bmp_loader_ctor(file_name);
-        Error err = bmp_loader_load(&loader);
+        Error        err = bmp_loader_load(&loader);
         if (err.code != ERR_NONE) {
             bmp_loader_dtor(&loader);
             return err;
@@ -742,26 +653,7 @@ static Error cmd_find_biggest_square(const char *file_name) {
         bmp = bmp_loader_get_bitmap(&loader);
     }
     /* search for biggest square */
-    Square max = square_invalid(), scanned = {0};
-    for (uint32_t row = 0; row < bmp.dimensions.height; row++) {
-        /* for every pixel in the row, check whether this pixel extends
-         * to orthogonal sides of a square (or itself in case of 1x1) */
-        for (uint32_t col = 0; col < bmp.dimensions.width; col++) {
-            scanned = scan_for_square(&bmp, (Point){col, row});
-            // square_print(scanned);
-            if (square_is_invalid(scanned)) {
-                continue;
-            }
-            if (square_is_invalid(max)) {
-                max = scanned;
-                continue;
-            }
-            /* if any square was found, compare to the currrent maximum */
-            if (square_cmp(max, scanned) < 0) {
-                max = scanned;
-            }
-        }
-    }
+    Square max = square_find_largest_square(&bmp);
     /* print results */
     if (square_is_invalid(max)) {
         printf("Not found\n");
@@ -780,11 +672,13 @@ static Error cmd_execute(UserCommand *cmd) {
         case TEST:
             return cmd_validate_bitmap_file(cmd->file_name);
         case HLINE:
-            return cmd_execute_search_line(cmd->file_name, find_longest_hline);
+            return cmd_execute_search_line(cmd->file_name,
+                                           line_find_longest_hline);
         case VLINE:
-            return cmd_execute_search_line(cmd->file_name, find_longest_vline);
+            return cmd_execute_search_line(cmd->file_name,
+                                           line_find_longest_vline);
         case SQUARE:
-            return cmd_find_biggest_square(cmd->file_name);
+            return cmd_execute_search_square(cmd->file_name);
     }
     return error_ctor(ERR_INTERNAL, "Invalid control path executed on line: %d",
                       __LINE__);
@@ -857,6 +751,10 @@ int main(int argc, char **argv) {
             return err.code;
         }
     }
+    //cmd.action_type = SQUARE;
+    //cmd.file_name =
+    //    "C:\\Prirodne_vedy_XX2\\event_scheduler\\VUT\\IZP\\projects\\IZP_"
+    //    "Figsearch\\test\\pics\\bmp_5459";
 
     /* execute given command */
     {
