@@ -5,7 +5,7 @@ import random
 from time import time
 import os
 
-DEF_BMP_SIZE = (10, 10)
+DEF_BMP_SIZE = (1920, 1080)
 N_TESTS: int = 20
 
 
@@ -216,6 +216,8 @@ def cmd_test(cmd: Command) -> None:
         if cmd.is_of_functional():
             for _ in range(N_TESTS):
                 tests_passed += 1 if _run_unit(cmd.exec, chance(), cmd.is_random_space) else 0
+            if cmd.is_verbose:
+                print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
         elif cmd.is_of_time():
             average: float = 0
             for _ in range(N_TESTS):
@@ -227,8 +229,6 @@ def cmd_test(cmd: Command) -> None:
     else:
         assert False  # TODO
 
-    if cmd.is_verbose:
-        print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
     print("Test ended.")
     input("Press any key to continue...")
 
@@ -334,6 +334,8 @@ def cmd_hline(cmd: Command) -> None:
         if cmd.is_of_functional():
             for _ in range(N_TESTS):
                 tests_passed += 1 if _run_unit(cmd.exec, cmd.is_random_space) else 0
+            if cmd.is_verbose:
+                print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
         elif cmd.is_of_time():
             average: float = 0
             for _ in range(N_TESTS):
@@ -345,8 +347,6 @@ def cmd_hline(cmd: Command) -> None:
     else:
         assert False  # TODO
 
-    if cmd.is_verbose:
-        print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
     print("Test ended.")
     input("Press any key to continue...")
 
@@ -431,6 +431,8 @@ def cmd_vline(cmd: Command) -> None:
         if cmd.is_of_functional():
             for _ in range(N_TESTS):
                 tests_passed += 1 if _run_unit(cmd.exec, cmd.is_random_space) else 0
+            if cmd.is_verbose:
+                print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
         elif cmd.is_of_time():
             average: float = 0
             for _ in range(N_TESTS):
@@ -441,8 +443,6 @@ def cmd_vline(cmd: Command) -> None:
     else:
         assert False  # TODO
 
-    if cmd.is_verbose:
-        print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
     print("Test ended.")
     input("Press any key to continue...")
 
@@ -533,6 +533,8 @@ def cmd_square(cmd: Command) -> None:
         if cmd.is_of_functional():
             for _ in range(N_TESTS):
                 tests_passed += 1 if _run_unit(cmd.exec, cmd.is_random_space) else 0
+            if cmd.is_verbose:
+                print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
         elif cmd.is_of_time():
             average = 0
             for _ in range(N_TESTS):
@@ -544,8 +546,6 @@ def cmd_square(cmd: Command) -> None:
     else:
         assert False  # TODO
 
-    if cmd.is_verbose:
-        print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
     print("Test ended.")
     input("Press any key to continue...")
 

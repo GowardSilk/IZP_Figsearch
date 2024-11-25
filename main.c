@@ -29,6 +29,8 @@
 #define CMD_MAX_ARGS (3)
 #define CMD_MIN_ARGS (2)
 
+#define COORD_INVALID (UINT32_MAX)
+
 /* =========================================
  *                  Error
  * ========================================= */
@@ -328,18 +330,24 @@ static Error bmp_loader_load(BitmapLoader *restrict loader) {
 }
 
 /* =========================================
- *                  Line
+ *                 Point
  * ========================================= */
 
 typedef struct Point {
     uint32_t x, y;
 } Point;
 
-static inline Point point_invalid() { return (Point){UINT32_MAX, UINT32_MAX}; }
+static inline Point point_invalid() {
+    return (Point){COORD_INVALID, COORD_INVALID};
+}
 
 static inline bool point_is_invalid(Point p) {
-    return p.x == UINT32_MAX && p.y == UINT32_MAX;
+    return p.x == COORD_INVALID && p.y == COORD_INVALID;
 }
+
+/* =========================================
+ *                  Line
+ * ========================================= */
 
 typedef struct Line {
     Point begin, end;
@@ -359,13 +367,6 @@ static inline bool line_is_invalid(Line l) {
 static inline void line_print(Line line) {
     printf("%d %d %d %d\n", line.begin.y, line.begin.x, line.end.y, line.end.x);
 }
-static inline uint32_t hline_length(HLine line) {
-    return line.end.x - line.begin.x;
-}
-static inline uint32_t vline_length(VLine line) {
-    return line.end.y - line.begin.y;
-}
-
 /**
  * @brief compares two lines based on their length
  * @return <0...lhs<rhs; >0...lhs>rhs; =0...lhs==rhs */
@@ -378,6 +379,12 @@ static int line_cmp(Line lhs, Line rhs, uint32_t (*length_func)(Line line)) {
         return rhs.begin.y - lhs.begin.y;
     }
     return rhs.begin.x - lhs.begin.x;
+}
+static inline uint32_t hline_length(HLine line) {
+    return line.end.x - line.begin.x;
+}
+static inline uint32_t vline_length(VLine line) {
+    return line.end.y - line.begin.y;
 }
 
 #define hline_cmp(lhs, rhs) (line_cmp((lhs), (rhs), hline_length))
@@ -465,7 +472,7 @@ static VLine find_longest_vline(Bitmap *bmp) {
         /* create an vertical iterator to move through the column */
         ver_it = bmp_it_ctor(
             bmp->data + col,
-            (bmp->dimensions.height - 1) * bmp->dimensions.width + col,
+            (bmp->dimensions.height - 1) * bmp->dimensions.width + col + 1,
             bmp->dimensions.width);
         /* find each line in a column and compare it to the max */
         for (uint32_t row = 0; row < bmp->dimensions.height;
@@ -600,9 +607,10 @@ static Square scan_for_square(const Bitmap *bmp, Point left_up) {
             bmp->dimensions.width);
 
         Point track_right_down = {.x = diagonal.end.x, .y = diagonal.begin.y};
-        for (; bmp_it_peek(&par_hor_it) != NULL &&
-               *par_hor_it.current == PXL_FILLED && bmp_it_peek(&par_ver_it) &&
-               *par_ver_it.current == PXL_FILLED;) {
+        for (; bmp_it_next(&par_hor_it) != NULL &&
+               *par_hor_it.current != PXL_EMPTY &&
+               bmp_it_next(&par_ver_it) != NULL &&
+               *par_ver_it.current != PXL_EMPTY;) {
             /* note: the iterators could potentially overflow the square since
              * we cannot know whether or not the squares have distinct
              * sides/anchors */
@@ -612,8 +620,6 @@ static Square scan_for_square(const Bitmap *bmp, Point left_up) {
             }
             track_right_down.x++;
             track_right_down.y++;
-            bmp_it_next(&par_hor_it);
-            bmp_it_next(&par_ver_it);
         }
 
         if (expected_right_down.x == track_right_down.x &&
@@ -742,6 +748,7 @@ static Error cmd_find_biggest_square(const char *file_name) {
          * to orthogonal sides of a square (or itself in case of 1x1) */
         for (uint32_t col = 0; col < bmp.dimensions.width; col++) {
             scanned = scan_for_square(&bmp, (Point){col, row});
+            // square_print(scanned);
             if (square_is_invalid(scanned)) {
                 continue;
             }
