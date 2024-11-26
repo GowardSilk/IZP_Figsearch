@@ -31,6 +31,8 @@
 
 #define COORD_INVALID (UINT32_MAX)
 
+#define BMP_LOADER_MAX_PXL_CHUNK_SIZE (256)
+
 /* =========================================
  *                  Error
  * ========================================= */
@@ -71,11 +73,18 @@ static inline Error error_none(void) { return (Error){ERR_NONE, NULL}; }
 
 static inline void error_print(Error err) { fprintf(stderr, "%s\n", err.msg); }
 
-static void error_dtor(Error *err) {
+/**
+ * @brief destroys the error's allocated memory
+ * @return the last error of `err` param */
+static ErrorNum error_dtor(Error *err) {
+    ErrorNum err_code = ERR_NONE;
     if (err->msg != NULL) {
+        err_code = err->code;
         free(err->msg);
         err->msg = NULL;
+        err->code = ERR_NONE;
     }
+    return err_code;
 }
 
 /* =========================================
@@ -195,7 +204,7 @@ static Error bmp_loader_ignore_whitespace(FILE *file,
                                           BitmapLoader *restrict loader) {
     /* buffered reading */
     while (!feof(file)) {
-        char   buffer[256] = {0};
+        char   buffer[BMP_LOADER_MAX_PXL_CHUNK_SIZE] = {0};
         size_t read =
             fread(&buffer, sizeof(char), sizeof(buffer) / sizeof(char), file);
         for (size_t i = 0; i < read; i++) {
@@ -382,7 +391,7 @@ static VLine line_find_vline(const Bitmap *bmp, Point begin) {
 }
 
 /** @brief scans for longest horizontal line */
-static HLine line_find_longest_hline(Bitmap *bmp) {
+static HLine line_find_longest_hline(const Bitmap *bmp) {
     HLine max = line_invalid(), temp = {0};
     for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
         for (uint32_t col = 0; col < bmp->dimensions.width; col++) {
@@ -400,7 +409,7 @@ static HLine line_find_longest_hline(Bitmap *bmp) {
 }
 
 /** @brief scans for longest vertical line */
-static VLine line_find_longest_vline(Bitmap *bmp) {
+static VLine line_find_longest_vline(const Bitmap *bmp) {
     VLine max = line_invalid(), temp = {0};
     for (uint32_t col = 0; col < bmp->dimensions.width; col++) {
         for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
@@ -428,17 +437,17 @@ static VLine line_find_longest_vline(Bitmap *bmp) {
  * ========================================= */
 
 typedef struct Square {
-    Point left_up, right_down;
+    Point top_left, bottom_right;
 } Square;
 
-static inline Square square_ctor(Point left_up, Point right_down) {
-    return (Square){left_up, right_down};
+static inline Square square_ctor(Point top_left, Point bottom_right) {
+    return (Square){top_left, bottom_right};
 }
 static inline Square square_invalid() {
     return square_ctor(point_invalid(), point_invalid());
 }
 static inline bool square_is_invalid(Square s) {
-    return point_is_invalid(s.left_up) && point_is_invalid(s.right_down);
+    return point_is_invalid(s.top_left) && point_is_invalid(s.bottom_right);
 }
 
 /**
@@ -446,22 +455,22 @@ static inline bool square_is_invalid(Square s) {
  * @note this function implicitly assumes that given arguments are squares
  * @return <0 when s1<s2; =0 when s1==s2; >0 when s1>s2; */
 static int square_cmp(Square s1, Square s2) {
-    uint32_t square_side_delta =
-        (s1.right_down.y - s1.left_up.y) - (s2.right_down.y - s2.left_up.y);
+    uint32_t square_side_delta = (s1.bottom_right.y - s1.top_left.y) -
+                                 (s2.bottom_right.y - s2.top_left.y);
     if (square_side_delta != 0) {
         return square_side_delta;
     }
     /* note: the logic here is inverted: the more closer it is to (0, 0); the
      * "bigger" the square */
-    if (s2.left_up.y != s1.left_up.y) {
-        return s2.left_up.y - s1.left_up.y;
+    if (s2.top_left.y != s1.top_left.y) {
+        return s2.top_left.y - s1.top_left.y;
     }
-    return s2.left_up.x - s1.left_up.x;
+    return s2.top_left.x - s1.top_left.x;
 }
 
 static inline void square_print(Square s1) {
-    printf("%" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 "\n", s1.left_up.y,
-           s1.left_up.x, s1.right_down.y, s1.right_down.x);
+    printf("%" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 "\n", s1.top_left.y,
+           s1.top_left.x, s1.bottom_right.y, s1.bottom_right.x);
 }
 
 static VLine square_find_vertical_side(const Bitmap *bmp, Point ver_begin) {
@@ -481,7 +490,7 @@ static Square square_find_largest_square(const Bitmap *bmp) {
             if (*bmp_at(bmp, row, col) == PXL_EMPTY) {
                 continue;
             }
-            Point    left_up = {col, row};
+            Point    top_left = {col, row};
             uint32_t x_track = col, y_track = row;
             /* search for the largest orthogonal anchor */
             for (;;) {
@@ -501,14 +510,14 @@ static Square square_find_largest_square(const Bitmap *bmp) {
             x_track -= 1;
             y_track -= 1;
             /*  */
-            Point expected_right_down = {x_track, y_track};
+            Point expected_bottom_right = {x_track, y_track};
             HLine hline =
                 square_find_horizontal_side(bmp, (Point){col, y_track});
             VLine vline = square_find_vertical_side(bmp, (Point){x_track, row});
-            if (hline.end.x >= expected_right_down.x &&
-                vline.end.y >= expected_right_down.y) {
+            if (hline.end.x >= expected_bottom_right.x &&
+                vline.end.y >= expected_bottom_right.y) {
                 /* found square */
-                temp = square_ctor(left_up, expected_right_down);
+                temp = square_ctor(top_left, expected_bottom_right);
                 if (square_is_invalid(max) || square_cmp(max, temp) < 0) {
                     max = temp;
                 }
@@ -519,18 +528,18 @@ static Square square_find_largest_square(const Bitmap *bmp) {
             /*
              * we have to search for the square "wrapped inside" the orthogonal
              * lines note: we can decrement x_track and y_track simultaneously
-             * since they are offsetted by the same value from the left_up
+             * since they are offsetted by the same value from the top_left
              */
             for (; x_track >= col; x_track--, y_track--) {
-                Point expected_right_down = {x_track, y_track};
+                Point expected_bottom_right = {x_track, y_track};
                 HLine hline =
                     square_find_horizontal_side(bmp, (Point){col, y_track});
                 VLine vline =
                     square_find_vertical_side(bmp, (Point){x_track, row});
-                if (hline.end.x >= expected_right_down.x &&
-                    vline.end.y >= expected_right_down.y) {
+                if (hline.end.x >= expected_bottom_right.x &&
+                    vline.end.y >= expected_bottom_right.y) {
                     /* found square */
-                    temp = square_ctor(left_up, expected_right_down);
+                    temp = square_ctor(top_left, expected_bottom_right);
                     if (square_is_invalid(max) || square_cmp(max, temp) < 0) {
                         max = temp;
                     }
@@ -614,7 +623,7 @@ static inline Error cmd_validate_bitmap_file(const char *file_name) {
 }
 
 static Error cmd_execute_search_line(const char *file_name,
-                                     Line (*line_search)(Bitmap *bmp)) {
+                                     Line (*line_search)(const Bitmap *bmp)) {
     /* load bitmap */
     Bitmap bmp = {0};
     {
@@ -747,22 +756,16 @@ int main(int argc, char **argv) {
         Error err = cmd_parse(argc, argv, &cmd);
         if (err.code != ERR_NONE) {
             error_print(err);
-            error_dtor(&err);
-            return err.code;
+            return error_dtor(&err);
         }
     }
-    //cmd.action_type = SQUARE;
-    //cmd.file_name =
-    //    "C:\\Prirodne_vedy_XX2\\event_scheduler\\VUT\\IZP\\projects\\IZP_"
-    //    "Figsearch\\test\\pics\\bmp_5459";
 
     /* execute given command */
     {
         Error err = cmd_execute(&cmd);
         if (err.code != ERR_NONE) {
             error_print(err);
-            error_dtor(&err);
-            return err.code;
+            return error_dtor(&err);
         }
     }
 
