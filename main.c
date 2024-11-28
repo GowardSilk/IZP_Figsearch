@@ -64,7 +64,7 @@ static Error error_ctor(ErrorNum err, const char *fmt, ...) {
     }
 
     /* write formatted message */
-    size = vsnprintf(err_msg, size, fmt, fmt_args);
+    vsnprintf(err_msg, size, fmt, fmt_args);
     va_end(fmt_args);
 
     return (Error){err, err_msg};
@@ -76,11 +76,10 @@ static inline void error_print(Error err) { fprintf(stderr, "%s\n", err.msg); }
 
 /**
  * @brief destroys the error's allocated memory
- * @return the last error of `err` param */
+ * @return the last error code of `err` param */
 static ErrorNum error_dtor(Error *err) {
-    ErrorNum err_code = ERR_NONE;
+    ErrorNum err_code = err->code;
     if (err->msg != NULL) {
-        err_code = err->code;
         free(err->msg);
         err->msg = NULL;
         err->code = ERR_NONE;
@@ -113,7 +112,7 @@ typedef struct Bitmap {
 typedef struct BitmapLoader {
     /** @brief staging bitmap buffer */
     Bitmap staging;
-    /** @brief stores the filename of the bitmap file */
+    /** @brief stores the file location of the bitmap file */
     const char *file_name;
     /** @brief holds the current number of pixels stored in staging buffer */
     size_t size;
@@ -138,13 +137,7 @@ static Error bmp_ctor(BitmapSize dimensions, Bitmap *out_bmp) {
     return error_none();
 }
 
-/**
- * @return pixel from given coordinates
- * @note this function does NOT contain any boundary conditions for `row` and
- * `col` param validation */
-static inline Pixel bmp_at(const Bitmap *bmp, uint32_t row, uint32_t col) {
-    return bmp->data[row * bmp->dimensions.width + col];
-}
+#define bmp_at(bmp, row, col) (bmp)->data[row * (bmp)->dimensions.width + col]
 
 /**
  * @brief destructs given bitmap if it is populated with data */
@@ -217,8 +210,7 @@ static Error bmp_loader_ignore_whitespace(FILE *file,
         /* buffered reading (we will read everything in smaller chunks to avoid
          * fgetc call overhead) */
         char   buffer[BMP_LOADER_READ_CHUNK_SIZE] = {0};
-        size_t read =
-            fread(&buffer, sizeof(char), sizeof(buffer) / sizeof(char), file);
+        size_t read = fread(&buffer, sizeof(char), sizeof(buffer), file);
         /* iterate over the read chunk and determine its validity and populate
          * the loader's staging buffer */
         for (size_t i = 0; i < read; i++) {
@@ -228,13 +220,13 @@ static Error bmp_loader_ignore_whitespace(FILE *file,
             if (bmp_valid_pix(buffer[i])) {
                 if (!bmp_loader_add_pixel(loader, buffer[i])) {
                     return error_ctor(ERR_INVALID_BITMAP_FILE,
-                                      "the raw bitmap size does not match given"
-                                      "dimensions!");
+                                      "The raw bitmap size does not match given"
+                                      " dimensions!");
                 }
                 continue;
             }
             return error_ctor(ERR_INVALID_BITMAP_FILE,
-                              "unexpected character encountered: '%c'",
+                              "Unexpected character encountered: '%c'",
                               buffer[i]);
         }
     }
@@ -242,11 +234,11 @@ static Error bmp_loader_ignore_whitespace(FILE *file,
 }
 
 /**
- * @brief loads bitmap dimension into out_dimension
+ * @brief loads bitmap dimension into `out_dimension`
  * @return error_none when loaded successfully, otherwsise Error::code > 0 */
 static inline Error bmp_loader_load_dimension(FILE     *file,
                                               uint32_t *out_dimension) {
-    int ret = fscanf(file, "%" PRIu32, out_dimension);
+    int ret = fscanf(file, "%" SCNu32, out_dimension);
     if (ret != 1) {
         return error_ctor(ERR_INVALID_DIMENSION,
                           "Given dimension [%" PRIu32 "], is not an int value!",
@@ -273,9 +265,7 @@ static inline Error bmp_loader_load_size(FILE *file, BitmapSize *out_size) {
 
 /**
  * @brief loads a bitmap into the staging buffer
- * @note ensure the loader has a unique staging buffer to avoid violations
- * @return `error_none` on success; otherwise, an error with `Error::code > 0`
- */
+ * @note ensure the loader has a unique staging buffer to avoid violations */
 static Error bmp_loader_load(BitmapLoader *restrict loader) {
     /* try to open bitmap */
     FILE *file = fopen(loader->file_name, "r");
@@ -418,8 +408,7 @@ static inline VLine line_find_vline(const Bitmap *bmp, const Point begin) {
         uint32_t y_track = begin.y + 1;
         for (; y_track < bmp->dimensions.height &&
                bmp_at(bmp, y_track, begin.x) == PXL_FILLED;
-             y_track++) {
-        }
+             y_track++) {}
         return line_ctor(begin, (Point){begin.x, y_track - 1});
     }
     return line_invalid_ctor();
@@ -427,11 +416,13 @@ static inline VLine line_find_vline(const Bitmap *bmp, const Point begin) {
 
 /** @brief scans for longest horizontal line */
 static HLine line_find_longest_hline(const Bitmap *bmp) {
-    HLine max = line_invalid_ctor(), temp = {0};
+    HLine    max = line_invalid_ctor(), temp = {0};
+    uint32_t max_length = 0;
     /* iterate over each row */
     for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
         /* scan each line for any horizontal line matches */
-        for (uint32_t col = 0; col < bmp->dimensions.width; col++) {
+        for (uint32_t col = 0; col < bmp->dimensions.width - max_length;
+             col++) {
             temp = line_find_hline(bmp, (Point){col, row});
             if (line_is_invalid(temp)) {
                 continue;
@@ -439,6 +430,7 @@ static HLine line_find_longest_hline(const Bitmap *bmp) {
             col = temp.end.x;
             if (line_is_invalid(max) || hline_cmp(max, temp) < 0) {
                 max = temp;
+                max_length = hline_length(max);
             }
         }
     }
@@ -447,11 +439,13 @@ static HLine line_find_longest_hline(const Bitmap *bmp) {
 
 /** @brief scans for longest vertical line */
 static VLine line_find_longest_vline(const Bitmap *bmp) {
-    VLine max = line_invalid_ctor(), temp = {0};
+    VLine    max = line_invalid_ctor(), temp = {0};
+    uint32_t max_length = 0;
     /* iterate over each column */
     for (uint32_t col = 0; col < bmp->dimensions.width; col++) {
         /* scan each line for any vertical line matches */
-        for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
+        for (uint32_t row = 0; row < bmp->dimensions.height - max_length;
+             row++) {
             temp = line_find_vline(bmp, (Point){col, row});
             if (line_is_invalid(temp)) {
                 continue;
@@ -459,6 +453,7 @@ static VLine line_find_longest_vline(const Bitmap *bmp) {
             row = temp.end.y;
             if (line_is_invalid(max) || vline_cmp(max, temp) < 0) {
                 max = temp;
+                max_length = vline_length(max);
             }
         }
     }
@@ -484,13 +479,17 @@ static inline bool square_is_invalid(const Square s) {
     return point_is_invalid(s.top_left) || point_is_invalid(s.bottom_right);
 }
 
+static inline uint32_t square_side_length(const Square s) {
+    return s.bottom_right.x - s.top_left.x + 1;
+}
+
 /**
  * @brief compares squares based on their side length
  * @note this function implicitly assumes that given arguments are squares
  * @return <0 when s1<s2; =0 when s1==s2; >0 when s1>s2; */
 static int square_cmp(const Square s1, const Square s2) {
-    uint32_t square_side_delta = (s1.bottom_right.y - s1.top_left.y) -
-                                 (s2.bottom_right.y - s2.top_left.y);
+    uint32_t square_side_delta =
+        square_side_length(s1) - square_side_length(s2);
     if (square_side_delta != 0) {
         return square_side_delta;
     }
@@ -508,19 +507,26 @@ static inline void square_print(const Square s1) {
 }
 
 #define square_find_vertical_side(bmp, row, col) \
-    (line_find_vline((bmp), (Point){col, row}))
+    (line_find_vline((bmp), (Point){(col), (row)}))
 #define square_find_horizontal_side(bmp, row, col) \
-    (line_find_hline((bmp), (Point){col, row}))
+    (line_find_hline((bmp), (Point){(col), (row)}))
 
 /**
  * @brief scans for the largest square in a bitmap
  * @return invalid square if no square was found */
 static Square square_find_largest_square(const Bitmap *bmp) {
-    Square max = square_invalid_ctor(), temp = {0};
+    Square   max = square_invalid_ctor(), temp = {0};
+    uint32_t max_length = 0;
     for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
+        uint32_t remaining_area =
+            (bmp->dimensions.height - row) * (bmp->dimensions.width);
+        if (max_length * max_length >= remaining_area) {
+            return max;
+        }
         /* for every pixel in the row, check whether this pixel extends
          * to orthogonal sides of a square (or itself in case of 1x1) */
-        for (uint32_t col = 0; col < bmp->dimensions.width; col++) {
+        for (uint32_t col = 0; col < bmp->dimensions.width - max_length;
+             col++) {
             if (bmp_at(bmp, row, col) == PXL_EMPTY) {
                 continue;
             }
@@ -555,6 +561,7 @@ static Square square_find_largest_square(const Bitmap *bmp) {
                 temp = square_ctor(top_left, expected_bottom_right);
                 if (square_is_invalid(max) || square_cmp(max, temp) < 0) {
                     max = temp;
+                    max_length = square_side_length(max);
                 }
                 /* note: we do not move the col offset because there can be
                  * other "square sides" inside the square we have found */
@@ -575,6 +582,7 @@ static Square square_find_largest_square(const Bitmap *bmp) {
                     temp = square_ctor(top_left, expected_bottom_right);
                     if (square_is_invalid(max) || square_cmp(max, temp) < 0) {
                         max = temp;
+                        max_length = square_side_length(max);
                     }
                     break;
                 }
