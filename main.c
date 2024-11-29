@@ -322,6 +322,9 @@ typedef struct Point {
     uint32_t y;
 } Point;
 
+/** @brief constructs Point */
+static inline Point point_ctor(uint32_t x, uint32_t y) { return (Point){x, y}; }
+
 /** @brief constructs Point and populates it with invalid data */
 static inline Point point_invalid_ctor() {
     return (Point){COORD_INVALID, COORD_INVALID};
@@ -333,57 +336,71 @@ static inline bool point_is_invalid(Point p) {
 }
 
 /* =========================================
+ *              ShapeGeometry
+ * ========================================= */
+
+/** @brief a common structure to represent geometrical shapes (Line/Square) */
+typedef struct {
+    /** @brief top-left or start point */
+    Point start;
+    /** @brief bottom-right or end point */
+    Point end;
+} ShapeGeometry;
+
+/** @brief constructs basic shape from given points */
+static inline ShapeGeometry shape_geometry_ctor(Point start, Point end) {
+    return (ShapeGeometry){start, end};
+}
+/** @brief constructs invalid shape */
+static inline ShapeGeometry shape_geometry_invalid_ctor() {
+    return shape_geometry_ctor(point_invalid_ctor(), point_invalid_ctor());
+}
+/**
+ * @brief compares two shapes based on their size
+ * @return <0...lhs<rhs; >0...lhs>rhs; =0...lhs==rhs */
+static int shape_geometry_cmp(const ShapeGeometry lhs, const ShapeGeometry rhs,
+                              uint32_t (*size_func)(const ShapeGeometry)) {
+    uint32_t length_delta = size_func(lhs) - size_func(rhs);
+    if (length_delta != 0) {
+        return length_delta;
+    }
+    if (lhs.start.y != rhs.start.y) {
+        return rhs.start.y - lhs.start.y;
+    }
+    return rhs.start.x - lhs.start.x;
+}
+static inline void shape_geometry_print(const ShapeGeometry shape) {
+    printf("%" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 "\n", shape.start.y,
+           shape.start.x, shape.end.y, shape.end.x);
+}
+static inline bool shape_geometry_is_invalid(const ShapeGeometry shape) {
+    return point_is_invalid(shape.start) || point_is_invalid(shape.end);
+}
+
+/* =========================================
  *                  Line
  * ========================================= */
 
 /** @brief defines a line by its begin and end point */
-typedef struct Line {
-    Point begin, end;
-} Line;
-typedef Line VLine;
-typedef Line HLine;
+typedef ShapeGeometry Line;
+typedef Line          VLine;  // [V]ertical
+typedef Line          HLine;  // [H]orizontal
 
-static inline Line line_ctor(Point begin, Point end) {
-    return (Line){begin, end};
-}
-/** @brief constructs line with invalid point coordinates */
-static inline Line line_invalid_ctor() {
-    return line_ctor(point_invalid_ctor(), point_invalid_ctor());
-}
-/** @brief checks whether a given line contains invalid coordinates */
-static inline bool line_is_invalid(Line l) {
-    return point_is_invalid(l.begin) || point_is_invalid(l.end);
-}
-/** @brief prints line in a format "R1 C1 R2 C2" */
-static inline void line_print(Line line) {
-    printf("%" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 "\n", line.begin.y,
-           line.begin.x, line.end.y, line.end.x);
-}
-/**
- * @brief compares two lines based on their length
- * @return <0...lhs<rhs; >0...lhs>rhs; =0...lhs==rhs */
-static int line_cmp(Line lhs, Line rhs, uint32_t (*length_func)(Line line)) {
-    uint32_t length_delta = length_func(lhs) - length_func(rhs);
-    if (length_delta != 0) {
-        return length_delta;
-    }
-    if (lhs.begin.y != rhs.begin.y) {
-        return rhs.begin.y - lhs.begin.y;
-    }
-    return rhs.begin.x - lhs.begin.x;
-}
+#define line_ctor(start, end) shape_geometry_ctor((start), (end))
+#define line_invalid_ctor()   shape_geometry_invalid_ctor()
+#define line_is_invalid(line) shape_geometry_is_invalid((line))
+#define line_print(line)      shape_geometry_print((line))
+#define hline_cmp(lhs, rhs)   shape_geometry_cmp((lhs), (rhs), hline_length)
+#define vline_cmp(lhs, rhs)   shape_geometry_cmp((lhs), (rhs), vline_length)
+
 /** @brief calculates length of horizontal line */
 static inline uint32_t hline_length(HLine line) {
-    return line.end.x - line.begin.x + 1;
+    return line.end.x - line.start.x + 1;
 }
 /** @brief calculates length of vertical line */
 static inline uint32_t vline_length(VLine line) {
-    return line.end.y - line.begin.y + 1;
+    return line.end.y - line.start.y + 1;
 }
-
-/* line comparison utilities */
-#define hline_cmp(lhs, rhs) (line_cmp((lhs), (rhs), hline_length))
-#define vline_cmp(lhs, rhs) (line_cmp((lhs), (rhs), vline_length))
 
 /**
  * @brief searches for a vertical line from `begin` in bitmap
@@ -396,12 +413,12 @@ static inline HLine line_find_hline(const Bitmap *bmp, const Point begin) {
                bmp_at(bmp, begin.y, x_track) == PXL_FILLED;
              x_track++)
             ;
-        return line_ctor(begin, (Point){x_track - 1, begin.y});
+        return line_ctor(begin, point_ctor(x_track - 1, begin.y));
     }
     return line_invalid_ctor();
 }
 
-/** same message ??? */
+/** @see line_find_hline */
 static inline VLine line_find_vline(const Bitmap *bmp, const Point begin) {
     if (bmp_at(bmp, begin.y, begin.x) == PXL_FILLED) {
         /* iterate until hit empty pixel or end of column */
@@ -409,7 +426,7 @@ static inline VLine line_find_vline(const Bitmap *bmp, const Point begin) {
         for (; y_track < bmp->dimensions.height &&
                bmp_at(bmp, y_track, begin.x) == PXL_FILLED;
              y_track++) {}
-        return line_ctor(begin, (Point){begin.x, y_track - 1});
+        return line_ctor(begin, point_ctor(begin.x, y_track - 1));
     }
     return line_invalid_ctor();
 }
@@ -464,48 +481,16 @@ static VLine line_find_longest_vline(const Bitmap *bmp) {
  *                  Square
  * ========================================= */
 
-typedef struct Square {
-    Point top_left, bottom_right;
-} Square;
+typedef ShapeGeometry Square;
 
-static inline Square square_ctor(const Point top_left,
-                                 const Point bottom_right) {
-    return (Square){top_left, bottom_right};
-}
-static inline Square square_invalid_ctor() {
-    return square_ctor(point_invalid_ctor(), point_invalid_ctor());
-}
-static inline bool square_is_invalid(const Square s) {
-    return point_is_invalid(s.top_left) || point_is_invalid(s.bottom_right);
-}
-
+#define square_ctor(start, end)   shape_geometry_ctor(start, end)
+#define square_invalid_ctor()     shape_geometry_invalid_ctor()
+#define square_is_invalid(square) shape_geometry_is_invalid(square)
+#define square_print(square)      shape_geometry_print(square)
+#define square_cmp(lhs, rhs)      shape_geometry_cmp(lhs, rhs, square_side_length)
 static inline uint32_t square_side_length(const Square s) {
-    return s.bottom_right.x - s.top_left.x + 1;
+    return s.end.x - s.start.x + 1;
 }
-
-/**
- * @brief compares squares based on their side length
- * @note this function implicitly assumes that given arguments are squares
- * @return <0 when s1<s2; =0 when s1==s2; >0 when s1>s2; */
-static int square_cmp(const Square s1, const Square s2) {
-    uint32_t square_side_delta =
-        square_side_length(s1) - square_side_length(s2);
-    if (square_side_delta != 0) {
-        return square_side_delta;
-    }
-    /* note: the logic here is inverted: the more closer it is to (0, 0); the
-     * "bigger" the square */
-    if (s2.top_left.y != s1.top_left.y) {
-        return s2.top_left.y - s1.top_left.y;
-    }
-    return s2.top_left.x - s1.top_left.x;
-}
-
-static inline void square_print(const Square s1) {
-    printf("%" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 "\n", s1.top_left.y,
-           s1.top_left.x, s1.bottom_right.y, s1.bottom_right.x);
-}
-
 #define square_find_vertical_side(bmp, row, col) \
     (line_find_vline((bmp), (Point){(col), (row)}))
 #define square_find_horizontal_side(bmp, row, col) \
@@ -553,6 +538,9 @@ static Square square_find_largest_square(const Bitmap *bmp) {
              * parallel sides were not found, check for each square "inside" the
              * range of left_up to the expected_bottom_right point */
             Point expected_bottom_right = {x_track, y_track};
+            if (max_length > expected_bottom_right.x - col + 1) {
+                continue;
+            }
             HLine hline = square_find_horizontal_side(bmp, y_track, col);
             VLine vline = square_find_vertical_side(bmp, row, x_track);
             if (hline.end.x >= expected_bottom_right.x &&
@@ -645,7 +633,8 @@ static inline Error cmd_display_help_message(void) {
 
 /**
  * @brief executes "test" figsearch command by trying to load the bitmap file
- * @return ERR_INVALID_BITMAP_FILE with message "Invalid" */
+ * @return ERR_INVALID_BITMAP_FILE with message "Invalid" when bitmap file is
+ * not valid */
 static inline Error cmd_validate_bitmap_file(const char *file_name) {
     /* try to load bmp, if caught any errors, print invalid */
     BitmapLoader temp = bmp_loader_ctor(file_name);
@@ -662,10 +651,9 @@ static inline Error cmd_validate_bitmap_file(const char *file_name) {
 }
 
 /**
- * @brief loads bitmap from given `file_name` and executes line search function
- */
-static Error cmd_execute_search_line(const char *file_name,
-                                     Line (*line_search)(const Bitmap *bmp)) {
+ * @brief loads bmp from given `file_name` and executes shape search function */
+static Error cmd_execute_shape_search(
+    const char *file_name, ShapeGeometry (*shape_search)(const Bitmap *bmp)) {
     /* load bitmap */
     Bitmap bmp = {0};
     {
@@ -677,39 +665,13 @@ static Error cmd_execute_search_line(const char *file_name,
         }
         bmp = bmp_loader_get_bitmap(&loader);
     }
-    /* scan for longest line */
-    const Line max_line = line_search(&bmp);
+    /* scan for largest shape */
+    const ShapeGeometry shape = shape_search(&bmp);
     /* print results */
-    if (line_is_invalid(max_line)) {
+    if (shape_geometry_is_invalid(shape)) {
         printf("Not found\n");
     } else {
-        line_print(max_line);
-    }
-    /* cleanup and return */
-    bmp_dtor(&bmp);
-    return error_none();
-}
-
-/** @brief scans for the biggest square */
-static Error cmd_execute_search_square(const char *file_name) {
-    /* load bitmap */
-    Bitmap bmp = {0};
-    {
-        BitmapLoader loader = bmp_loader_ctor(file_name);
-        Error        err = bmp_loader_load(&loader);
-        if (err.code != ERR_NONE) {
-            bmp_loader_dtor(&loader);
-            return err;
-        }
-        bmp = bmp_loader_get_bitmap(&loader);
-    }
-    /* search for biggest square */
-    Square max = square_find_largest_square(&bmp);
-    /* print results */
-    if (square_is_invalid(max)) {
-        printf("Not found\n");
-    } else {
-        square_print(max);
+        shape_geometry_print(shape);
     }
     /* cleanup and return */
     bmp_dtor(&bmp);
@@ -723,13 +685,14 @@ static Error cmd_execute(UserCommand *cmd) {
         case TEST:
             return cmd_validate_bitmap_file(cmd->file_name);
         case HLINE:
-            return cmd_execute_search_line(cmd->file_name,
-                                           line_find_longest_hline);
+            return cmd_execute_shape_search(cmd->file_name,
+                                            line_find_longest_hline);
         case VLINE:
-            return cmd_execute_search_line(cmd->file_name,
-                                           line_find_longest_vline);
+            return cmd_execute_shape_search(cmd->file_name,
+                                            line_find_longest_vline);
         case SQUARE:
-            return cmd_execute_search_square(cmd->file_name);
+            return cmd_execute_shape_search(cmd->file_name,
+                                            square_find_largest_square);
     }
     return error_ctor(ERR_INTERNAL, "Invalid control path executed on line: %d",
                       __LINE__);
@@ -750,7 +713,7 @@ static Error cmd_parse(int argc, char **argv, UserCommand *out_cmd) {
     }
 
     /* validate command args */
-    if (argc == CMD_MIN_ARGS) /* HELP command */ {
+    if (argc == CMD_MIN_ARGS) /* HELP command only */ {
         if (strcmp(argv[1], "--help") == 0) {
             out_cmd->action_type = HELP;
             return error_none();
@@ -762,7 +725,7 @@ static Error cmd_parse(int argc, char **argv, UserCommand *out_cmd) {
     }
 
     /*
-     * convenient macro for command type check (command parse
+     * convenient macro for command type check (cmd_parse
      * function-only)
      */
 #define register_command(cmd_input, cmd_name, reg_type, reg_file_name)     \
