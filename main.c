@@ -481,6 +481,8 @@ static VLine line_find_longest_vline(const Bitmap *bmp) {
  *                  Square
  * ========================================= */
 
+/** @brief Square is defined by its "top_left" point (ShapeGeometry::start) and
+ * its "bottom_right" point (ShapeGeometry::end) */
 typedef ShapeGeometry Square;
 
 #define square_ctor(start, end)   shape_geometry_ctor(start, end)
@@ -496,13 +498,31 @@ static inline uint32_t square_side_length(const Square s) {
 #define square_find_horizontal_side(bmp, row, col) \
     (line_find_hline((bmp), (Point){(col), (row)}))
 
+static inline bool square_found_valid_square(const Bitmap *bmp, Point top_left,
+                                             Point bottom_right) {
+    HLine hline = square_find_horizontal_side(bmp, bottom_right.y, top_left.x);
+    VLine vline = square_find_vertical_side(bmp, top_left.y, bottom_right.x);
+
+    return hline.end.x >= bottom_right.x && vline.end.y >= bottom_right.y;
+}
+
+static inline void square_set_max_square(Square *max, uint32_t *max_length,
+                                         Square rhs) {
+    if (square_is_invalid(*max) || square_cmp(*max, rhs) < 0) {
+        *max = rhs;
+        *max_length = square_side_length(rhs);
+    }
+}
+
 /**
  * @brief scans for the largest square in a bitmap
  * @return invalid square if no square was found */
 static Square square_find_largest_square(const Bitmap *bmp) {
-    Square   max = square_invalid_ctor(), temp = {0};
+    Square   max = square_invalid_ctor();
     uint32_t max_length = 0;
     for (uint32_t row = 0; row < bmp->dimensions.height; row++) {
+        /* check if the remaining scan area is still larger then the largest
+         * square we have found */
         uint32_t remaining_area =
             (bmp->dimensions.height - row) * (bmp->dimensions.width);
         if (max_length * max_length >= remaining_area) {
@@ -541,37 +561,30 @@ static Square square_find_largest_square(const Bitmap *bmp) {
             if (max_length > expected_bottom_right.x - col + 1) {
                 continue;
             }
-            HLine hline = square_find_horizontal_side(bmp, y_track, col);
-            VLine vline = square_find_vertical_side(bmp, row, x_track);
-            if (hline.end.x >= expected_bottom_right.x &&
-                vline.end.y >= expected_bottom_right.y) {
+            if (square_found_valid_square(bmp, top_left,
+                                          expected_bottom_right)) {
                 /* found square */
-                temp = square_ctor(top_left, expected_bottom_right);
-                if (square_is_invalid(max) || square_cmp(max, temp) < 0) {
-                    max = temp;
-                    max_length = square_side_length(max);
-                }
+                square_set_max_square(
+                    &max, &max_length,
+                    square_ctor(top_left, expected_bottom_right));
                 /* note: we do not move the col offset because there can be
                  * other "square sides" inside the square we have found */
                 continue;
             }
             /*
              * we have to search for the square "wrapped inside" the orthogonal
-             * lines note: we can decrement x_track and y_track simultaneously
+             * lines
+             * note: we can decrement x_track and y_track simultaneously
              * since they are offsetted by the same value from the top_left
              */
             for (; x_track >= col; x_track--, y_track--) {
-                Point expected_bottom_right = {x_track, y_track};
-                HLine hline = square_find_horizontal_side(bmp, y_track, col);
-                VLine vline = square_find_vertical_side(bmp, row, x_track);
-                if (hline.end.x >= expected_bottom_right.x &&
-                    vline.end.y >= expected_bottom_right.y) {
+                expected_bottom_right = (Point){x_track, y_track};
+                if (square_found_valid_square(bmp, top_left,
+                                              expected_bottom_right)) {
                     /* found square */
-                    temp = square_ctor(top_left, expected_bottom_right);
-                    if (square_is_invalid(max) || square_cmp(max, temp) < 0) {
-                        max = temp;
-                        max_length = square_side_length(max);
-                    }
+                    square_set_max_square(
+                        &max, &max_length,
+                        square_ctor(top_left, expected_bottom_right));
                     break;
                 }
             }
