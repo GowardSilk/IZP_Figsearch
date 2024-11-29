@@ -5,7 +5,7 @@ import random
 from time import time
 import os
 
-DEF_BMP_SIZE = (1920, 1080)
+DEF_BMP_SIZE = (10, 10)
 N_TESTS: int = 20
 
 
@@ -30,7 +30,7 @@ class Command:
             assert os.path.exists(cmd[1])
             self.exec = cmd[1]
         elif len(cmd) == 1:
-            self.cmd_type = __FUNCTIONALITY
+            self.cmd_type = self.__FUNCTIONALITY
             assert os.path.exists(cmd[1])
             self.exec = cmd[0]
         else:
@@ -55,7 +55,7 @@ class Command:
         return self.verbose
 
     @staticmethod
-    def on_help(self) -> None:
+    def on_help() -> None:
         assert False  # TODO
 
     __FUNCTIONALITY = "functionality"
@@ -155,7 +155,7 @@ def random_space(gen_random: bool, default: str = " ") -> str:
         else "".join(
             [
                 random.choice([" ", "\t", "\n", "\v", "\f", "\r"])
-                for i in range(random.randint(1, 10))
+                for _ in range(random.randint(1, 10))
             ]
         )
     )
@@ -215,9 +215,13 @@ def cmd_test(cmd: Command) -> None:
     if cmd.is_random_test:
         if cmd.is_of_functional():
             for _ in range(N_TESTS):
-                tests_passed += 1 if _run_unit(cmd.exec, chance(), cmd.is_random_space) else 0
+                tests_passed += (
+                    1 if _run_unit(cmd.exec, chance(), cmd.is_random_space) else 0
+                )
             if cmd.is_verbose:
-                print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
+                print(
+                    f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%"
+                )
         elif cmd.is_of_time():
             average: float = 0
             for _ in range(N_TESTS):
@@ -252,6 +256,20 @@ class Line:
     def vlength(self) -> int:
         return self.end.x - self.begin.x
 
+    def hcmp(self, rhs: "Line") -> int:
+        if self.hlength() != rhs.hlength():
+            return self.hlength() - rhs.hlength()
+        if self.begin.x != rhs.begin.x:
+            return rhs.begin.x - self.begin.x
+        return rhs.begin.y - self.begin.y
+
+    def vcmp(self, rhs: "Line") -> int:
+        if self.vlength() != rhs.vlength():
+            return self.vlength() - rhs.vlength()
+        if self.begin.x != rhs.begin.x:
+            return rhs.begin.x - self.begin.x
+        return rhs.begin.y - self.begin.y
+
     def __str__(self) -> str:
         return f"{self.begin.x} {self.begin.y} {self.end.x} {self.end.y}"
 
@@ -270,18 +288,15 @@ def cmd_hline(cmd: Command) -> None:
 
             if last_pos == max_col:
                 end = Point(row_offset, last_pos - 1)
+            elif last_pos + max_length > max_col:
+                end = Point(row_offset, last_pos - 1)
             else:
-                if last_pos + max_length > max_col:
-                    end = Point(row_offset, last_pos - 1)
-                else:
-                    end = Point(
-                        row_offset, random.randint(last_pos, last_pos + max_length)
-                    )
+                end = Point(row_offset, random.randint(last_pos, last_pos + max_length))
 
-            last_pos = end.y + 1
             hlines.append(Line(begin, end))
+            last_pos = end.y + 1
 
-            if hlines[-1].hlength() > max_line.hlength():
+            if max_line.hcmp(hlines[-1]) < 0:
                 max_line = hlines[-1]
 
         return (max_line, hlines)
@@ -294,14 +309,12 @@ def cmd_hline(cmd: Command) -> None:
                 + str(size.width)
                 + random_space(gen_random_space, "\n")
             )
-            # generate hlines in each row
-            max_line: Line = Line(Point(0, 0), Point(0, 0))
+            max_line: Line = Line(Point(-1, -1), Point(-1, -1))
             for row in range(size.height):
-                # generate hlines in row
                 max_row_line, hlines = _generate_hlines(row, size.width)
-                if max_row_line.hlength() > max_line.hlength():
+                if max_line.begin.x < 0 or max_line.hcmp(max_row_line) < 0:
                     max_line = max_row_line
-                hlines_str: list[chr] = ["0" for _ in range(size.width)]
+                hlines_str: list[str] = ["0" for _ in range(size.width)]
                 for _ in range(len(hlines)):
                     for j in range(hlines[-1].hlength()):
                         hlines_str[j + hlines[-1].begin.y] = "1"
@@ -312,7 +325,7 @@ def cmd_hline(cmd: Command) -> None:
                     + random_space(gen_random_space, "\n")
                 )
 
-            max_line.end.y -= 1 # TODO: WHY IS THIS NECESSARY? WHERE IS THE INDEXING BUG???
+            max_line.end.y -= 1
             return max_line
 
     def _run_unit_time(exec: str, gen_random_space: bool) -> float:
@@ -335,7 +348,9 @@ def cmd_hline(cmd: Command) -> None:
             for _ in range(N_TESTS):
                 tests_passed += 1 if _run_unit(cmd.exec, cmd.is_random_space) else 0
             if cmd.is_verbose:
-                print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
+                print(
+                    f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%"
+                )
         elif cmd.is_of_time():
             average: float = 0
             for _ in range(N_TESTS):
@@ -350,31 +365,27 @@ def cmd_hline(cmd: Command) -> None:
     print("Test ended.")
     input("Press any key to continue...")
 
-
     return None
 
 
 def cmd_vline(cmd: Command) -> None:
-    def _generate_vlines(col_offset: int, max_row: int) -> tuple[Line, list[Line]]:
+    def _generate_vlines(col_offset: int, max_col: int) -> tuple[Line, list[Line]]:
         vlines: list[Line] = []
-        max_length: int = random.randint(0, max_row // 3)
+        max_length: int = random.randint(0, max_col // 2)
         last_pos: int = 0
         max_line: Line = Line(Point(0, 0), Point(0, 0))
 
-        while last_pos + max_length <= max_row:
+        while last_pos + max_length < max_col:
             begin = Point(random.randint(last_pos, last_pos + max_length), col_offset)
             last_pos = begin.x
             end: Point
 
-            if last_pos == max_row:
-                end = Point(random.randint(last_pos, last_pos), col_offset)
+            if last_pos == max_col:
+                end = Point(max_col - 1, col_offset)
+            elif last_pos + max_length > max_col:
+                end = Point(random.randint(last_pos, max_col - 1), col_offset)
             else:
-                if last_pos + max_length > max_row:
-                    end = Point(random.randint(last_pos, max_row), col_offset)
-                else:
-                    end = Point(
-                        random.randint(last_pos, last_pos + max_length), col_offset
-                    )
+                end = Point(random.randint(last_pos, last_pos + max_length), col_offset)
 
             last_pos = end.x + 1
             vlines.append(Line(begin, end))
@@ -392,29 +403,32 @@ def cmd_vline(cmd: Command) -> None:
                 + str(size.width)
                 + random_space(gen_random_space, "\n")
             )
-            # generate hlines in each row
-            max_line: Line = Line(Point(0, 0), Point(0, 0))
-            for row in range(size.height):
-                # generate hlines in row
-                max_row_line, hlines = _generate_vlines(row, size.width)
-                if max_row_line.hlength() > max_line.hlength():
-                    max_line = max_row_line
-                hlines_str: list[chr] = ["0" for _ in range(size.width)]
-                for _ in range(len(hlines)):
-                    for j in range(hlines[-1].hlength()):
-                        hlines_str[j + hlines[-1].begin.y] = "1"
-                    hlines.pop()
+            max_line: Line = Line(Point(-1, -1), Point(-1, -1))
+            bmp_str: list[list[str]] = [
+                ["0" for _ in range(size.width)] for _ in range(size.height)
+            ]
+            for col in range(size.height):
+                max_col_line, vlines = _generate_vlines(col, size.height)
+                if max_line.begin.x < 0 or max_line.vcmp(max_col_line) < 0:
+                    max_line = max_col_line
+                for vline in vlines:
+                    for j in range(vline.begin.x, vline.end.x):
+                        bmp_str[j][vline.begin.y] = "1"
 
+            for i in range(size.height):
                 file.write(
-                    random_space(gen_random_space).join(hlines_str)
+                    random_space(gen_random_space).join(
+                        [bmp_str[i][j] for j in range(size.width)]
+                    )
                     + random_space(gen_random_space, "\n")
                 )
 
+            max_line.end.x -= 1
             return max_line
 
     def _run_unit_time(exec: str, gen_random_space: bool) -> float:
         bmp: str = f"{curr_dir()}/pics/bmp_{random.randint(0, 10000)}"
-        max_line: Line = _generate_bmp(BitmapSize(), bmp, gen_random_space)
+        _ = _generate_bmp(BitmapSize(), bmp, gen_random_space)
         passed, delta = subprocess_evaluate_timed([exec, "vline", bmp])
         assert passed
         print(f"Test took {delta}s.")
@@ -432,7 +446,9 @@ def cmd_vline(cmd: Command) -> None:
             for _ in range(N_TESTS):
                 tests_passed += 1 if _run_unit(cmd.exec, cmd.is_random_space) else 0
             if cmd.is_verbose:
-                print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
+                print(
+                    f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%"
+                )
         elif cmd.is_of_time():
             average: float = 0
             for _ in range(N_TESTS):
@@ -448,23 +464,28 @@ def cmd_vline(cmd: Command) -> None:
 
     return None
 
+
 @dataclass
 class Square:
     left_up: Point
     right_down: Point
 
     def __str__(self) -> str:
-        return f"{self.left_up.y} {self.left_up.x} {self.right_down.y} {self.right_down.x}"
+        return (
+            f"{self.left_up.y} {self.left_up.x} {self.right_down.y} {self.right_down.x}"
+        )
+
 
 def square_cmp(s1: Square, s2: Square) -> int:
-            s1_side = s1.right_down.y - s1.left_up.y + 1
-            s2_side = s2.right_down.y - s2.left_up.y + 1
+    s1_side = s1.right_down.y - s1.left_up.y + 1
+    s2_side = s2.right_down.y - s2.left_up.y + 1
 
-            if s1_side != s2_side:
-                return s2_side - s1_side
-            if s1.left_up.y != s2.left_up.y:
-                return s2.left_up.y - s1.left_up.y
-            return s2.left_up.x - s1.left_up.x
+    if s1_side != s2_side:
+        return s2_side - s1_side
+    if s1.left_up.x != s2.left_up.x:
+        return s2.left_up.x - s1.left_up.x
+    return s2.left_up.y - s1.left_up.y
+
 
 def cmd_square(cmd: Command) -> None:
     def _generate_squares(size: BitmapSize, loc: str, gen_random_space: bool) -> Square:
@@ -534,7 +555,9 @@ def cmd_square(cmd: Command) -> None:
             for _ in range(N_TESTS):
                 tests_passed += 1 if _run_unit(cmd.exec, cmd.is_random_space) else 0
             if cmd.is_verbose:
-                print(f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%")
+                print(
+                    f"Summary: {tests_passed} out of {N_TESTS}. Success rate: {(tests_passed / N_TESTS) * 100}%"
+                )
         elif cmd.is_of_time():
             average = 0
             for _ in range(N_TESTS):
